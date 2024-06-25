@@ -3,7 +3,7 @@ import pickle
 import sys
 from collections import defaultdict
 from datetime import datetime
-from itertools import combinations, product
+from itertools import combinations
 import math
 import numpy as np
 import pandas as pd
@@ -164,7 +164,8 @@ def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold):
         # distribution_corr.append(corr)
 
         # pairs_to_remove; contains pairs that below the threshold and pval is 0 or above 0.05
-        if corr < threshold or pval == 0 or pval > 0.05:
+        if corr < threshold or pval > 0.05:
+            # pval == 0 or
             pairs_to_remove.append((name1, name2))
 
     return pairs, pairs_to_remove
@@ -193,7 +194,8 @@ def nextT(mutual_taxa, dict_level_num, dict_in_level, threshold):
         # [T1 T2] between [T2 T3]
         corr, pval = spearmanr(array1_T_current_next, array2_T_current_next)
 
-        if corr < 0.5 or pval == 0 or pval > 0.05:
+        if corr < 0.5 or pval > 0.05:
+            # pval == 0 or
             pairs_to_remove.append((name1, name2))
 
         # [T2 T3] between [T1 T2]
@@ -201,7 +203,8 @@ def nextT(mutual_taxa, dict_level_num, dict_in_level, threshold):
         array2_T_current_next = dict_level_num[name1]['next_t']
 
         corr, pval = spearmanr(array1_T_current_next, array2_T_current_next)
-        if corr < threshold or pval == 0 or pval > 0.05:
+        if corr < threshold or pval > 0.05:
+            # or pval == 0
             pairs_to_remove.append((name1, name2))
 
     # in order if we have (a,a) twice.
@@ -307,7 +310,11 @@ def checking_person(over_time, processed_list, dict_time, tag):
         data_frame = pd.DataFrame(0, index=locations, columns=['sick', 'healthy', 'not_in_sick', 'not_in_healthy'])
         number_graph = 0
 
-        for line in lines:
+        for index, line in enumerate(lines):
+            how_health = 0
+            how_sick = 0
+            if index == 3:
+                c = 0
             comb = fix_comb_format(line)
             specify_node = []
 
@@ -335,16 +342,17 @@ def checking_person(over_time, processed_list, dict_time, tag):
                 bits = over_time.loc[i]
                 combi_time = "".join([times_letter[place] for place, i in enumerate(bits) if i == 1])
 
-                for index_time, tuple_dict_letter in enumerate(zip(times_letter, dict_time)):
+                for tuple_dict_letter in zip(times_letter, dict_time):
                     letter, dict_letter_time = tuple_dict_letter
                     if letter in combi_time:
-                        idx = np.where(np.array(processed_list[index_time].index) == i)[0][0]
+                        time_point_index = times_letter.index(letter)
+                        idx = np.where(np.array(processed_list[time_point_index].index) == i)[0][0]
                         # for each node in the combination i will check if it exist (bigger than 0) in the current sample
                         comb_results[letter] = [1 if dict_letter_time[node][idx] > 0 else 0 for node in comb]
 
-                if tag_index == 'healthy':
+                if tag_index1 == 'not_in_healthy':
                     how_health += len(comb_results)
-                else:
+                elif tag_index1 == 'not_in_sick':
                     how_sick += len(comb_results)
                 # person_values = pd.concat([df for df in dfs])
                 bacteria_next = [tup[0] for tup in specify_node if 'next' in tup]
@@ -418,7 +426,7 @@ def checking_the_sub_graph_over_all(over_time, processed, all_samples_dict_time,
 
         for time_letter in combi_time:
 
-            time_point_index= times.index(time_letter)
+            time_point_index = times.index(time_letter)
             # index_sample_in_time; (int) the index of the sample at time point
             index_sample_in_time = np.where(np.array(processed[time_point_index].index) == i)[0][0]
 
@@ -466,7 +474,8 @@ def chi_square(health_sick_counts_per_graph_table, sick, healthy, p_value_thresh
 
         chi2_stat, p_val, _, _ = chi2_contingency([observed, excepted_row])
         # ignore p_val that are equals to 0 or bigger than the threshold
-        if p_val > p_value_threshold or p_val == 0:
+        if p_val > p_value_threshold:
+            # or p_val == 0
             continue
 
         results.append((index, sick, healthy, not_in_sick, not_in_healthy, chi2_stat, p_val))
@@ -552,9 +561,9 @@ def combination_node(k=4):
 
 def check_where_id(processed_list):
     """
-    A function that create a matrix of
+   A function that creates a matrix of samples over times, where 1 indicates that the sample exists at this time, otherwise 0
     :param processed_list: list with all the processed csv, where each processed csv points to a time.
-    :return: A matrix of samples on times, where 1 indicates that the sample is exists in this time, otherwise 0
+    :return: None, saves the matrix to a CSV file
     """
     # Getting all the samples id all over processed_list
     ids = [item for sub in [item.index for item in processed_list] for item in sub]
@@ -562,6 +571,8 @@ def check_where_id(processed_list):
     ids = [str(i) for i in ids]
     # Creating a dictionary that points to each time point dict, for example over_time = {'A': {}, 'B': {}, 'C': {}}
     over_time = {chr(65 + i): {} for i in range(len(processed_list))}
+    over_time_healthy = {chr(65 + i): {} for i in range(len(processed_list))}
+    over_time_sick = {chr(65 + i): {} for i in range(len(processed_list))}
     for i in ids:
         for index_pro_list, pro_list in enumerate(processed_list):
             # if i is in pro_list.index we will put 1
@@ -570,12 +581,93 @@ def check_where_id(processed_list):
 
     over_time_df = pd.DataFrame(over_time)
     over_time_df.fillna(0, inplace=True)
+    over_time_df.to_csv(f"{folder}/over_time.csv")
+
     return over_time_df
+
+
+def plot():
+    real = pd.read_csv(f'/home/shanif3/Dyamic_data/GDM-original/src/Results/chi_square_test.csv', index_col=0)
+    shuffle = pd.read_csv('/home/shanif3/Dyamic_data/GDM-original/src/Results_shuffle/chi_square_test.csv', index_col=0)
+
+    real_p = real['p_value']
+    shuffle_p = shuffle['p_value']
+    real_chi2 = real['chi2']
+    shuffle_chi2 = shuffle['chi2']
+
+    real_p_transformed = -np.log10(real_p)
+    shuffle_p_transformed = -np.log10(shuffle_p)
+
+    # Create a DataFrame to keep p-values and chi2 together
+    real_combined = pd.DataFrame({
+        'p_value_transformed': real_p_transformed,
+        'chi2': real_chi2
+    })
+
+    shuffle_combined = pd.DataFrame({
+        'p_value_transformed': shuffle_p_transformed,
+        'chi2': shuffle_chi2
+    })
+
+    # real_filtered = real_combined[(real_combined['chi2'] >= 200) & (real_combined['chi2'] <= 600)]
+    # shuffle_filtered = shuffle_combined[(shuffle_combined['chi2'] >= 200) & (shuffle_combined['chi2'] <= 600)]
+
+    # Plot the data
+    plt.figure(figsize=(10, 6))
+    plt.scatter(real_combined['chi2'], real_combined['p_value_transformed'], label='Real Data', marker='x')
+    plt.scatter(shuffle_combined['chi2'], shuffle_combined['p_value_transformed'], label='Shuffle Data', marker='o')
+
+    plt.xlabel('Chi-squared value')
+    plt.ylabel('-log10(p-value)')
+    plt.title('Chi-squared values vs -log10(p-values) of Real and Shuffle Data')
+    # plt.xlim(200, 600)
+
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('ch2_vs_pval_plot.png')
+
+
+    #second option
+
+    # Order the values by size
+    real_p_sorted = np.sort(real_p_transformed)[::-1] [200:]
+    shuffle_p_sorted = np.sort(shuffle_p_transformed)[::-1] [200:]
+
+    # Plot the data
+    plt.figure(figsize=(10, 6))
+    plt.plot(real_p_sorted, label='Real Data', marker='x')
+    plt.plot(shuffle_p_sorted, label='Shuffle Data', marker='x')
+    plt.xlabel('Ordered Index')
+    plt.ylabel('-log10(p-value)')
+    plt.title('-log10(p-values) of Real and Shuffle Data')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig("p_val_plot.png")
+
+
+def tag_shuffle(over_time, tag):
+    # Calculate the number of non-zero entries for each row
+    lengths = over_time.sum(axis=1)
+    # Group sample indices by their lengths
+    length_groups = {}
+    for idx, length in lengths.items():
+        length_groups.setdefault(length, []).append(idx)
+
+    for length, indices in length_groups.items():
+        group_tags = tag.loc[indices, 'Tag'].tolist()
+        np.random.shuffle(group_tags)
+        tag.loc[indices, 'Tag'] = group_tags
+
+    return tag
 
 
 def main():
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
-    folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
+    shuffle = True
+    if shuffle:
+        folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results_shuffle'
+    else:
+        folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
 
     # Loading dataset time points
     timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
@@ -591,10 +683,10 @@ def main():
     threshold_p_value = 0.05
     k_comb = 4
 
-    run(timeA, timeB, timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb)
+    run(timeA, timeB, timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb,shuffle)
 
 
-def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold_p_value, k_comb):
+def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold_p_value, k_comb,shuffle):
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     print("Starting at :", current_time)
@@ -611,16 +703,17 @@ def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold
 
     # checking the samples over time on all the samples ( including samples that are not along all the time points)
     over_time = check_where_id(processed)
-
+    if shuffle:
+        tag = tag_shuffle(over_time, tag)
     graph(samples_all_time_dict_time)
     combination_node(k_comb)
-
+    #
     health_sick_counts_per_graph_table = checking_person(over_time, processed, all_samples_dict_time, tag)
     sick, healthy = count_sick_health(over_time, tag)
     comb = chi_square(health_sick_counts_per_graph_table, sick, healthy, p_value_threshold=threshold_p_value)
 
     checking_the_sub_graph_over_all(over_time, processed, all_samples_dict_time, comb, tag)
-
+    plot()
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     print("finished at :", current_time)

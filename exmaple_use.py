@@ -6,9 +6,13 @@ import MIPMLP
 def main():
     # taxonomy_levels; (list) specify all the taxonomy levels you are using
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
+    # shuffle; (bool) shuffle mode
+    shuffle = False
     # folder; (String) specify a folder to save the output
-    folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
-
+    if shuffle:
+        folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results_shuffle'
+    else:
+        folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
     # Loading dataset time points
     timeA = pd.read_csv(f"src/Data/T[A].csv", index_col=0)
     timeB = pd.read_csv(f"src/Data/T[B].csv", index_col=0)
@@ -25,7 +29,7 @@ def main():
     # k_comb; (int) specify how many nodes will be in each sub graph, default k=4
     k_comb = 4
 
-    run(process_timeA, process_timeB, process_timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb)
+    run(process_timeA, process_timeB, process_timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb,shuffle)
 
 
 if __name__ == '__main__':
