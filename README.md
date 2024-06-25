@@ -1,9 +1,9 @@
 # **S**ub **G**raph **C**ount test
 ## Table of contents
-- [Installation] (https://github.com/shanif3/sgc#Installation)
-- [Project Structure] (https://github.com/shanif3/sgc#project-structure)
-- [Quick Tour] (https://github.com/shanif3/sgc#quick-tour)
-- [Example use] (https://github.com/shanif3/sgc#example-use)
+- [Installation](https://github.com/shanif3/sgc#Installation)
+- [Project Structure](https://github.com/shanif3/sgc#project-structure)
+- [Quick Tour](https://github.com/shanif3/sgc#quick-tour)
+- [Example use](https://github.com/shanif3/sgc#example-use)
 ## Installation
 ``` python
     python pip sgc   
