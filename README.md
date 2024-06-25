@@ -53,9 +53,9 @@ def main():
    tag = pd.read_csv(f"src/Data/tag.csv", index_col=0)
 
    # Preprocess the data using MIPMLP
-   process_timeA = MIPMLP.preprocess(timeA, taxnomy_group="mean", normalization='relative')
-   process_timeB = MIPMLP.preprocess(timeB, taxnomy_group="mean", normalization='relative')
-   process_timeC = MIPMLP.preprocess(timeC, taxnomy_group="mean", normalization='relative')
+   process_timeA = MIPMLP.preprocess(timeA, taxnomy_group="mean", normalization='none')
+   process_timeB = MIPMLP.preprocess(timeB, taxnomy_group="mean", normalization='none')
+   process_timeC = MIPMLP.preprocess(timeC, taxnomy_group="mean", normalization='none')
 
    # threshold_p_value; (float) threshold p value
    threshold_p_value = 0.05
