@@ -1,6 +1,6 @@
 # **S**ub **G**raph **C**ount test
 ## Table of contents
-- [Installation](https://github.com/shanif3/sgc#Installation)
+- [Installation](https://github.com/shanif3/sgc#installation)
 - [Project Structure](https://github.com/shanif3/sgc#project-structure)
 - [Quick Tour](https://github.com/shanif3/sgc#quick-tour)
 - [Example use](https://github.com/shanif3/sgc#example-use)
@@ -21,7 +21,7 @@ In this repository, all the code and data are under `src` dir. You can find the 
 │   └── README.md
 ```
 
-##  Quick tour
+## Quick tour
 In order to use our pacakge, please follow the tour.    
 1. Preprocess your data using MIPMLP package, in order to do so please format the data as following:   
    - The first column is named "ID"
