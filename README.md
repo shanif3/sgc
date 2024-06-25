@@ -12,13 +12,21 @@ python pip sgc
 In this repository, all the code and data are under `src` dir. You can find the `example_use`
 ``` bash
 ├── exmaple_use.py
+├── README.md
 ├── src
 │   ├── Data
 │   │   ├── T[A].csv
+│   │   ├── tag.csv
 │   │   ├── T[B].csv
 │   │   └── T[C].csv
 │   ├── graph_update.py
-│   └── README.md
+│   └── Results
+│       ├── all_patients_over_time_with_comb.csv
+│       ├── chi_square_test.csv
+│       ├── combi.txt
+│       ├── health_sick_counts_per_graph.csv
+│       └── my_dict.pickle
+
 ```
 
 ## Quick tour
