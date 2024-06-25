@@ -10,10 +10,10 @@ def main():
     folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
 
     # Loading dataset time points
-    timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
-    timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
-    timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
-    tag = pd.read_csv(f"Data/tag.csv", index_col=0)
+    timeA = pd.read_csv(f"src/Data/T[A].csv", index_col=0)
+    timeB = pd.read_csv(f"src/Data/T[B].csv", index_col=0)
+    timeC = pd.read_csv(f"src/Data/T[C].csv", index_col=0)
+    tag = pd.read_csv(f"src/Data/tag.csv", index_col=0)
 
     # Preprocess the data using MIPMLP
     process_timeA = MIPMLP.preprocess(timeA, taxnomy_group="mean", normalization='none')
