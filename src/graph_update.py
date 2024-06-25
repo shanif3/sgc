@@ -630,8 +630,8 @@ def plot():
     #second option
 
     # Order the values by size
-    real_p_sorted = np.sort(real_p_transformed)[::-1] [200:]
-    shuffle_p_sorted = np.sort(shuffle_p_transformed)[::-1] [200:]
+    real_p_sorted = np.sort(real_p_transformed)[::-1]
+    shuffle_p_sorted = np.sort(shuffle_p_transformed)[::-1]
 
     # Plot the data
     plt.figure(figsize=(10, 6))
@@ -662,6 +662,7 @@ def tag_shuffle(over_time, tag):
 
 
 def main():
+    plot()
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
     shuffle = True
     if shuffle:
