@@ -5,8 +5,8 @@
 - [Quick Tour](https://github.com/shanif3/sgc#quick-tour)
 - [Example use](https://github.com/shanif3/sgc#example-use)
 ## Installation
-``` python
-    python pip sgc   
+``` bash
+python pip sgc   
 ```
 ## Project structure 
 In this repository, all the code and data are under `src` dir. You can find the `example_use`
