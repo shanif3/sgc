@@ -1,5 +1,6 @@
 import os
 import pickle
+import sys
 from collections import defaultdict
 from datetime import datetime
 from itertools import combinations, product
@@ -41,7 +42,7 @@ def create_dicts(processed):
     # if statement; to check that all the processed datasets having the same shape or mutual_samples_over_time is
     # not empty
     if not all_same_shape or len(mutual_samples_over_time) == 0:
-        print("Something wrong with the data. ")
+        sys.exit("Something wrong with the data. Existing the program")
         # TODO: handle here !
 
     # dict_time; (list) contains a dict for each time point.
