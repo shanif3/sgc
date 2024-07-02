@@ -1,8 +1,9 @@
 import os
 import pickle
 import sys
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import datetime
+from functools import reduce
 from itertools import combinations
 import math
 import numpy as np
@@ -13,6 +14,9 @@ from scipy.stats.mstats import spearmanr
 from scipy.stats import chi2_contingency
 import statsmodels.stats.multitest as smt
 from tqdm import tqdm
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_curve, roc_auc_score
+import scipy.stats as statss
 
 global taxonomy_levels
 global folder
@@ -97,9 +101,12 @@ def create_dicts(processed):
     return samples_all_time_dict_time, all_samples_no_matter_time_dict_time
 
 
-def correlation_link(dict_level_num, level_num, list_dict_time, parents, mode='SameT'):
+def correlation_link(dict_level_num, level_num, list_dict_time, parents, distribution_corr, mode='SameT',
+                     processed=None):
     """
 
+    :param distribution_corr:
+    :param processed:
     :param dict_level_num:
     :param mode:
     :param level_num:
@@ -125,19 +132,22 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, mode='S
     # adding to all_levels in 'level' row the values of the taxa from each time point
 
     if mode == 'SameT':
-        pairs, pairs_to_remove = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.6)
+        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.65,
+                                                          distribution_corr=distribution_corr)
     else:
-        pairs, pairs_to_remove = nextT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.4)
+        if processed is not None:
+            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.7,
+                                                              distribution_corr=distribution_corr)
 
     for pair in pairs_to_remove:
         pairs.remove(pair)
 
     selected_bac_same_T = set([item for sublist in pairs for item in sublist])
 
-    return pairs, selected_bac_same_T
+    return pairs, selected_bac_same_T, distribution_corr
 
 
-def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold):
+def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold, distribution_corr):
     for name in mutual_taxa:
         # taxa_value; (list) contains the bac values along the time points
         taxa_value = []
@@ -154,55 +164,103 @@ def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold):
     names = list(dict_level_num.keys())
     pairs = list(combinations(names, 2))
     pairs_to_remove = []
-
     # loop over all pairs combinations for correlation check
     for name1, name2 in pairs:
         array1 = dict_level_num[name1]
         array2 = dict_level_num[name2]
         # using spearman correlation- to address a correlation
         corr, pval = spearmanr(array1, array2)
-        # distribution_corr.append(corr)
+        distribution_corr.append(corr)
 
         # pairs_to_remove; contains pairs that below the threshold and pval is 0 or above 0.05
         if corr < threshold or pval > 0.05:
             # pval == 0 or
             pairs_to_remove.append((name1, name2))
 
-    return pairs, pairs_to_remove
+    return pairs, pairs_to_remove, distribution_corr
 
 
-def nextT(mutual_taxa, dict_level_num, dict_in_level, threshold):
-    for name in mutual_taxa:
-        value_t = []
-        for dict_time_ in dict_in_level:
-            value_t.extend(dict_time_.get(name, []))
-        current_t = value_t[:-1]  # All elements except the last one
-        next_t = value_t[1:]  # All elements except the first one
-        if name not in dict_level_num:
-            dict_level_num[name] = {"current_t": current_t, "next_t": next_t}
-
-    names = set(dict_level_num.keys())
+def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
     # pairs = list(product(selected_bac_same_T, names))
-    pairs = list(combinations(names, 2))
+    pairs = list(combinations(mutual_taxa, 2))
     pairs_to_remove = []
+    dict_t = {}
+    dict_t_1 = {}
 
+    # number_of_pairs_time; (int) number of time pairs, for example we have 4 time steps, so we have 3 pairs of times: (T1,T2)(T2,T3),(T3,T4)
+    number_pairs_of_time = len(dict_in_level) - 1
+    # Iterating over all the pairs, and checking for spearman correlation
     for name1, name2 in pairs:
-        array1_T_current_next = dict_level_num[name1]['current_t']
-        array2_T_current_next = dict_level_num[name2]['next_t']
+        list_bac1_t = dict_t.get(name1, [])
+        list_bac2_t_1 = dict_t_1.get(name2, [])
+
+        list_bac2_t = dict_t.get(name2, [])
+        list_bac1_t_1 = dict_t_1.get(name1, [])
+        bac1_exist = False
+        bac2_exist = False
+        if list_bac1_t != [] and list_bac1_t_1 != []:
+            bac1_exist = True
+
+        if list_bac2_t != [] and list_bac2_t_1 != []:
+            bac2_exist = True
+
+        flag_first = True
+        # checking if the lists are empty or they got the value from the dict.
+        if not bac1_exist or not bac2_exist:
+            for pair_time in range(number_pairs_of_time):
+                mutual_index_t = processed[pair_time].index.intersection(processed[pair_time + 1].index)
+                mutual_index_location = np.where(processed[pair_time].index.isin(mutual_index_t))[0]
+                # flag_first; (bool) used to indicates if we are in the first time step, if so i want to add the value just for list1_t. so i will compare between T1 T2.
+                if flag_first:
+                    # adding T1 to list_bac1_t and T2 to list_bac2_t_1
+                    if not bac1_exist:
+                        list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                    if not bac2_exist:
+                        list_bac2_t_1.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+
+                    # adding T1 to list_bac2_t and T2 to list_bac1_t_1
+                    if not bac2_exist:
+                        list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                    if not bac1_exist:
+                        list_bac1_t_1.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                    flag_first = False
+                    continue
+
+                if not bac1_exist:
+                    list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                if not bac2_exist:
+                    list_bac2_t_1.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+
+                if not bac2_exist:
+                    list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                if not bac1_exist:
+                    list_bac1_t_1.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+
+        if name1 not in dict_t:
+            dict_t[name1] = []
+            dict_t[name1] = list_bac1_t
+        if name2 not in dict_t:
+            dict_t[name2] = []
+            dict_t[name2] = list_bac2_t
+
+        if name1 not in dict_t_1:
+            dict_t_1[name1] = []
+            dict_t_1[name1] = list_bac1_t_1
+        if name2 not in dict_t_1:
+            dict_t_1[name2] = []
+            dict_t_1[name2] = list_bac2_t_1
 
         # Compute the Spearman correlation between the pairs
         # [T1 T2] between [T2 T3]
-        corr, pval = spearmanr(array1_T_current_next, array2_T_current_next)
-
+        corr, pval = spearmanr(list_bac1_t, list_bac2_t_1)
+        distribution_corr.append(corr)
         if corr < 0.5 or pval > 0.05:
             # pval == 0 or
             pairs_to_remove.append((name1, name2))
 
         # [T2 T3] between [T1 T2]
-        array1_T_current_next = dict_level_num[name2]['current_t']
-        array2_T_current_next = dict_level_num[name1]['next_t']
-
-        corr, pval = spearmanr(array1_T_current_next, array2_T_current_next)
+        corr, pval = spearmanr(list_bac2_t, list_bac1_t_1)
+        distribution_corr.append(corr)
         if corr < threshold or pval > 0.05:
             # or pval == 0
             pairs_to_remove.append((name1, name2))
@@ -210,10 +268,10 @@ def nextT(mutual_taxa, dict_level_num, dict_in_level, threshold):
     # in order if we have (a,a) twice.
     pairs_to_remove = set(pairs_to_remove)
 
-    return pairs, pairs_to_remove
+    return pairs, pairs_to_remove, distribution_corr
 
 
-def graph(dict_time):
+def graph(dict_time, processed):
     """
     Building the graph. The workflow is by starting from mode='SameT' to collect correlations between bac at the same
     time point. Then, we will check mode= 'NextT' to collect correlations between bac at the current time points to
@@ -225,6 +283,8 @@ def graph(dict_time):
 
     parents = None
     node_neighborhood = {}
+    distribution_corr_same = []
+    distribution_corr_next = []
 
     # starting from level 1 ( phylum) to level 6 (species)
     for level in range(1, 7):
@@ -239,7 +299,9 @@ def graph(dict_time):
         # as the following [T1 T2 T3] vs [T1 T2 T3]
 
         dict_level_num = {}
-        pairs, selected_bac_same_T = correlation_link(dict_level_num, level, dict_time, parents, mode='SameT')
+        pairs, selected_bac_same_T, distribution_corr_same = correlation_link(dict_level_num, level, dict_time, parents,
+                                                                              distribution_corr=distribution_corr_same,
+                                                                              mode='SameT')
 
         for u, v in pairs:
             if u not in node_neighborhood:
@@ -253,7 +315,11 @@ def graph(dict_time):
         # For example, if we have 3 time points, we will check correlation between 2 bac values along time points --> as
         # the following [T1 T2] vs [T2 T3]
         dict_level_num = {}
-        directed_pairs, selected_bac_next_T = correlation_link(dict_level_num, level, dict_time, parents, mode='NextT')
+        directed_pairs, selected_bac_next_T, distribution_corr_next = correlation_link(dict_level_num, level, dict_time,
+                                                                                       parents,
+                                                                                       distribution_corr=distribution_corr_next,
+                                                                                       mode='NextT',
+                                                                                       processed=processed)
 
         ###### just for checking the sub graph im editing that the directed edges will be undircted
         for u, v in directed_pairs:
@@ -276,11 +342,24 @@ def graph(dict_time):
                         node_neighborhood[child].append({parent: {'time': 'none', 'level': 'parent'}})
 
         parents = children
-        print(f"{level} level is done")
+        print(f"{level_name} level is done")
 
     print(f"The graph has {len(node_neighborhood)} nodes")
+    plt.hist(distribution_corr_same, bins=10, edgecolor='black')
+    plt.title('Distribution of Spearman Correlations same')
+    plt.xlabel('Correlation')
+    plt.ylabel('Frequency')
+    plt.savefig(f"{folder}.dist_same.png")
+    plt.show()
+    plt.hist(distribution_corr_next, bins=10, edgecolor='black')
+    plt.title('Distribution of Spearman Correlations next')
+    plt.xlabel('Correlation')
+    plt.ylabel('Frequency')
+    plt.savefig(f"{folder}/dist_next.png")
+    plt.show()
     with open(f'{folder}/my_dict.pickle', 'wb') as f:
         pickle.dump(node_neighborhood, f)
+    return node_neighborhood
 
 
 def fix_comb_format(line):
@@ -290,7 +369,8 @@ def fix_comb_format(line):
     return comb
 
 
-def checking_person(over_time, processed_list, dict_time, tag):
+def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time, processed_list, dict_time, tag,
+                    mode='train'):
     """
 
     :param over_time:
@@ -298,86 +378,115 @@ def checking_person(over_time, processed_list, dict_time, tag):
     :param dict_time:
     :return:
     """
-    how_sick = 0
-    how_health = 0
-    with open(f'{folder}/my_dict.pickle', 'rb') as f:
-        node_neighborhood = pickle.load(f)
+
     times_letter = [chr(65 + i) for i in range(len(processed_list))]  # Generates ['A', 'B', 'C', 'D', ...]
 
-    with open(f"{folder}/combi.txt", 'r') as f:
-        lines = f.readlines()
-        locations = list(range(len(lines)))
-        data_frame = pd.DataFrame(0, index=locations, columns=['sick', 'healthy', 'not_in_sick', 'not_in_healthy'])
-        number_graph = 0
+    locations = list(range(len(combinations_graph_nodes)))
+    data_frame = pd.DataFrame(0, index=locations, columns=['sick', 'healthy', 'not_in_sick', 'not_in_healthy'])
+    number_graph = 0
+    # dict_num_comb_index_samples; (dict) {comb: {healthy: index1,index2...},{sick:index5,index6..},{not_in_sick: index11},{not_in_healthy: index12}}
+    # for each sub graph we will have its sick and healthy and not in comb samples indexes.
+    dict_num_comb_index_samples = defaultdict(lambda: defaultdict(list))
 
-        for index, line in enumerate(lines):
-            how_health = 0
-            how_sick = 0
-            if index == 3:
-                c = 0
-            comb = fix_comb_format(line)
-            specify_node = []
+    for index, comb in enumerate(tqdm(combinations_graph_nodes)):
 
-            for number_node, node in enumerate(comb):
-                time = []
-                for neighborhood in node_neighborhood[node]:
-                    if next(iter(neighborhood)) in comb and next(iter(neighborhood)) is not node:
+        specify_node = []
 
-                        time_n = list(node_neighborhood[node][np.where == next(iter(neighborhood))].values())[0]['time']
-                        time.append(time_n)
-                        # len(comb)-1; should be less than the comb len by 1, because its not including the node itself.
-                        # so if the comb len is 4, i supposed to get maximum 3 items in time list
-                        # ( why maximum? --> because not everyone is connecting to everyone)
-                        if len(time) == len(comb) - 1:
-                            break
-                if 'next' in time and 'same' in time:
-                    time_n = 'both'
+        for number_node, node in enumerate(comb):
+            time = []
+            for neighborhood in node_neighborhood_dict[node]:
+                if next(iter(neighborhood)) in comb and next(iter(neighborhood)) is not node:
+
+                    time_n = list(node_neighborhood_dict[node][np.where == next(iter(neighborhood))].values())[0][
+                        'time']
+                    time.append(time_n)
+                    # len(comb)-1; should be less than the comb len by 1, because its not including the node itself.
+                    # so if the comb len is 4, i supposed to get maximum 3 items in time list
+                    # ( why maximum? --> because not everyone is connecting to everyone)
+                    if len(time) == len(comb) - 1:
+                        break
+            if 'next' in time and 'same' in time:
+                time_n = 'both'
+            if time != []:
                 specify_node.append((number_node, node, time_n))
 
-            for i in over_time.index:
-                tag_index = 'healthy' if tag.loc[i][0] == 0 else 'sick'
-                tag_index1 = 'not_in_healthy' if tag.loc[i][0] == 0 else 'not_in_sick'
+        for sample_index in over_time.index:
+            tag_index = 'healthy' if tag.loc[sample_index][0] == 0 else 'sick'
+            tag_index1 = 'not_in_healthy' if tag.loc[sample_index][0] == 0 else 'not_in_sick'
 
-                comb_results = {}
-                bits = over_time.loc[i]
-                combi_time = "".join([times_letter[place] for place, i in enumerate(bits) if i == 1])
+            comb_results = {}
+            bits = over_time.loc[sample_index]
+            combi_time = "".join([times_letter[place] for place, i in enumerate(bits) if i == 1])
 
-                for tuple_dict_letter in zip(times_letter, dict_time):
-                    letter, dict_letter_time = tuple_dict_letter
-                    if letter in combi_time:
-                        time_point_index = times_letter.index(letter)
-                        idx = np.where(np.array(processed_list[time_point_index].index) == i)[0][0]
-                        # for each node in the combination i will check if it exist (bigger than 0) in the current sample
-                        comb_results[letter] = [1 if dict_letter_time[node][idx] > 0 else 0 for node in comb]
+            for tuple_dict_letter in zip(times_letter, dict_time):
+                letter, dict_letter_time = tuple_dict_letter
+                if letter in combi_time:
+                    time_point_index = times_letter.index(letter)
+                    idx = np.where(np.array(processed_list[time_point_index].index) == sample_index)[0][0]
+                    # for each node in the combination i will check if it exist (bigger than 0) in the current
+                    # sample
+                    comb_results[letter] = [1 if dict_letter_time[node][idx] > 0 else 0 for node in comb]
 
-                if tag_index1 == 'not_in_healthy':
-                    how_health += len(comb_results)
-                elif tag_index1 == 'not_in_sick':
-                    how_sick += len(comb_results)
-                # person_values = pd.concat([df for df in dfs])
-                bacteria_next = [tup[0] for tup in specify_node if 'next' in tup]
+            # bacteria_next; contains the index of the bacteria that have correlation between the current time to the next one.
+            # tup[0] will return the index number of bacteria.
+            bacteria_next = [tup[0] for tup in specify_node if 'next' in tup]
 
-                # how many times_letter i have
-                # for each time in sample i will check if the sub graph is there, if so +1 to sub graph
-                for i, time in enumerate(comb_results):
-                    time = comb_results[time]
-                    mult = 1
-                    if len(bacteria_next) > 0:
-                        # checking if i have an acseess to the next time if there is so
-                        if i + 1 <= len(comb_results) - 1:
-                            # multiple the next t
-                            values_next = [comb_results[i + 1][node_next] for node_next in bacteria_next]
-                            mult *= math.prod(values_next)
-                        # if i dont have both ( same and next) and i have just next i dont want to multiple it in the same T so we will remove it
-                        time = [i for index, i in enumerate(time) if index not in bacteria_next]
-                    mult *= math.prod(time)
-                    if mult == 1:
-                        data_frame.loc[number_graph, tag_index] += 1
-                    else:
-                        data_frame.loc[number_graph, tag_index1] += 1
-            number_graph += 1
-        data_frame.to_csv(f"{folder}/health_sick_counts_per_graph.csv")
-        return data_frame
+            # for each time in sample i will check if the sub graph is there, if so +1 to sub graph
+            for i, time in enumerate(comb_results):
+                time = comb_results[time]
+                mult = 1
+                # bacteria_next; contains the bacteria indexes that has correlation between the current time step to the next.
+                # len(bacteria_next)>0; checking if there are indexes (bacteria) that have correlation to the next time step.
+                if len(bacteria_next) > 0:
+                    # Checking if I have access to the next time step (meaning if I have next time step at the current time step)
+                    if i + 1 <= len(comb_results) - 1:
+                        # multiply the next t:
+                        # (list(comb_results.items()))[i+1] return the time_letter:values of k bacteria, at time i+1 (for example B:[1,1,,1,1] where k=4)
+                        # (list(comb_results.items()))[i+1][1] return the values
+                        # (list(comb_results.items()))[i+1][1][node_next_index] return the value at index node_next_index
+                        values_next = [(list(comb_results.items()))[i + 1][1][node_next_index] for node_next_index in
+                                       bacteria_next]
+                        # multiply the next t
+                        mult *= math.prod(values_next)
+                    # time; (list) the values of the bacteria index that are not in
+                    # bacteria_next, meaning that they have correlation at the same time step (sameT).
+                    time = [i for index, i in enumerate(time) if index not in bacteria_next]
+                mult *= math.prod(time)
+                if mult == 1:
+                    data_frame.loc[number_graph, tag_index] += 1
+                    # saving to the comb dict an index of sample that has the comb, based on its tag (healthy, sick)
+                    #  the index sample will appear in the dict the same amount of time that he has this comb
+                    dict_num_comb_index_samples[index][tag_index].append(sample_index)
+                else:
+                    data_frame.loc[number_graph, tag_index1] += 1
+                    # if the index sample doesn't have the comb we will add it to 'not_in' section
+                    dict_num_comb_index_samples[index][tag_index1].append(sample_index)
+
+        number_graph += 1
+
+    if mode == 'test':
+        return check_people_test(dict_num_comb_index_samples)
+
+    # indices_to_remove; (list) getting the indices of sub graph( comb) that doesnt appear in no one
+    indices_to_remove = data_frame[(data_frame['sick'] == 0) & (data_frame['healthy'] == 0)].index
+    # filtered_combinations_list; (list) all the combinations that appear at least in one time step
+    filtered_combinations_list = [value for idx, value in enumerate(combinations_graph_nodes) if
+                                  idx not in indices_to_remove]
+
+    # filtered_num_com_index_samples; (dict) updating the dict to the relevant comb that appear at least in one time step
+    filtered_num_com_index_samples = defaultdict(dict)
+    new_key = 0
+    for old_key, value in dict_num_comb_index_samples.items():
+        if old_key not in indices_to_remove:
+            filtered_num_com_index_samples[new_key] = value
+            new_key += 1
+
+    # Remove graphs that appear in no one
+    data_frame = data_frame[(data_frame['sick'] > 0) | (data_frame['healthy'] > 0)]
+    # because we deleted rows, now we will reset the index
+    data_frame = data_frame.reset_index(drop=True)
+    data_frame.to_csv(f"{folder}/health_sick_counts_per_graph.csv")
+    return data_frame, filtered_num_com_index_samples, filtered_combinations_list
 
 
 # in order to get how many sick and healthy i have in total in all times all persons ( yes, there is duplicates)
@@ -397,13 +506,77 @@ def count_sick_health(over_time, tag):
     return sick, healthy
 
 
+def check_people_test(dict_num_comb_index_samples):
+    # save the intersection index in sick, healthy
+    # Extract all 'sick' lists
+    intersection_sick_counter, intersection_sick_list = get_intersection_list(dict_num_comb_index_samples, type='sick')
+    intersection_healthy_counter, intersection_healthy_list = get_intersection_list(dict_num_comb_index_samples,
+                                                                                    type='healthy')
+    intersection_not_in_sick_counter, intersection_not_in_sick_list = get_intersection_list(dict_num_comb_index_samples,
+                                                                                            type='not_in_sick')
+    intersection_not_in_healthy_counter, intersection_not_in_healthy_list = get_intersection_list(
+        dict_num_comb_index_samples, type='not_in_healthy')
+
+    not_in_intersection_sick = get_not_intersection_list(dict_num_comb_index_samples, intersection_sick_counter,
+                                                         type='sick')
+    not_in_intersection_healthy = get_not_intersection_list(dict_num_comb_index_samples, intersection_healthy_counter,
+                                                            type='healthy')
+
+    c = 0
+    data = {
+        'sick': [len(intersection_sick_list)],
+        'healthy': [len(intersection_healthy_list)],
+        'not_in_sick': [len(not_in_intersection_sick) + len(intersection_not_in_sick_list)],
+        'not_in_healthy': [len(not_in_intersection_healthy) + len(intersection_not_in_healthy_list)],
+    }
+    data_frame = pd.DataFrame(data)
+    data_frame = data_frame[(data_frame['sick'] > 0) | (data_frame['healthy'] > 0)]
+
+    data_dict = defaultdict(list)
+
+    # Insert the lists into the defaultdict
+    data_dict['sick'] = intersection_sick_list
+    data_dict['healthy'] = intersection_healthy_list
+    data_dict['not_in_sick'] = not_in_intersection_sick + intersection_not_in_sick_list
+    data_dict['not_in_healthy'] = not_in_intersection_healthy + intersection_not_in_healthy_list
+
+    return data_frame, data_dict
+
+
+def get_intersection_list(dict_num_comb_index_samples, type: str):
+    type_lists = [Counter(dict_num_comb_index_samples[key][type]) for key in dict_num_comb_index_samples if
+                  type in dict_num_comb_index_samples[key]]
+
+    # Reduce to find the intersection across all lists
+    if len(type_lists) >= 1:
+        intersection_counter = reduce(lambda x, y: x & y, type_lists)
+
+        # Convert the intersection counter to a list with duplicates
+        intersection_list = list(intersection_counter.elements())
+    else:
+        intersection_counter = Counter()
+        intersection_list = []
+
+    return intersection_counter, intersection_list
+
+
+def get_not_intersection_list(dict_num_comb_index_samples, intersection_counter, type: str):
+    # Find all elements not in the intersection
+    non_intersection_sick_lists = []
+    for key in dict_num_comb_index_samples:
+        if type in dict_num_comb_index_samples[key]:
+            # Elements in the original list but not in the intersection
+            non_intersection = list(
+                (Counter(dict_num_comb_index_samples[key][type]) - intersection_counter).elements())
+            non_intersection_sick_lists.append(non_intersection)
+
+    # Flatten the list of non-intersections
+    non_intersection_flattened = [item for sublist in non_intersection_sick_lists for item in sublist]
+    return non_intersection_flattened
+
+
 # By a given combination we will check the comb values all over the data
-def checking_the_sub_graph_over_all(over_time, processed, all_samples_dict_time, comb, tag):
-    comb = fix_comb_format(comb)
-
-    with open(f'{folder}/my_dict.pickle', 'rb') as f:
-        node_neighborhood = pickle.load(f)
-
+def checking_the_sub_graph_over_all(node_neighborhood, over_time, processed, all_samples_dict_time, comb, tag):
     for number_node, node in enumerate(comb):
         time = []
         for neighborhood in node_neighborhood[node]:
@@ -464,7 +637,6 @@ def chi_square(health_sick_counts_per_graph_table, sick, healthy, p_value_thresh
     excepted_row = [sick, healthy, 0, 0]
 
     df = health_sick_counts_per_graph_table
-
     for index, row in df.iterrows():
         observed = row[['sick', 'healthy', 'not_in_sick', 'not_in_healthy']].values
         sick = observed[0]
@@ -511,23 +683,20 @@ def chi_square(health_sick_counts_per_graph_table, sick, healthy, p_value_thresh
     return comb
 
 
-def combination_node(k=4):
+def combination_node(node_neighborhood, k=4):
     """
 
     :param k: number of nodes in sub graph
     :param folder: path to folder containing my_dict.pickle
     :return: list of valid node combinations
     """
-    # Load node neighbors from pickle file
-    with open(f'{folder}/my_dict.pickle', 'rb') as f:
-        node_neighbors = pickle.load(f)
 
     combi = []
     c = 0
-    nodes = list(node_neighbors.keys())  # Convert keys to list for Python 3 compatibility
+    nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
     node_combinations = list(combinations(nodes, k))
 
-    with open(f"{folder}/combi.txt", 'w') as f, tqdm(total=len(node_combinations)) as pbar:
+    with tqdm(total=len(node_combinations)) as pbar:
         for node_comb in node_combinations:
             # Update progress bar
             pbar.update(1)
@@ -535,7 +704,7 @@ def combination_node(k=4):
             # count_child_parent_connections; (int) indicates how many child-parent connections we have.
             # If we have more than 2, we will not use this combination- sub graph.
             count_child_parent_connections = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighbors[i] if
+                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
                 j in dict_n.keys() and dict_n[j]['level'] == 'child')
             if count_child_parent_connections > 2:
                 continue
@@ -543,16 +712,11 @@ def combination_node(k=4):
             # num_edges; (int) indicates how many connections we have among the nodes in such comb, we want more than
             # 4 connection in order to take it as sub graph.
             num_edges = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighbors[i] if j in dict_n.keys())
+                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if j in dict_n.keys())
 
             if num_edges >= 4:
                 c += 1
                 combi.append(node_comb)
-                f.write(f"{node_comb}\n")
-
-    # Save valid combinations to pickle file
-    with open(f'{folder}/combi.pickle', 'wb') as f:
-        pickle.dump(combi, f)
 
     print(f"Found {c} valid combinations.")
 
@@ -571,8 +735,7 @@ def check_where_id(processed_list):
     ids = [str(i) for i in ids]
     # Creating a dictionary that points to each time point dict, for example over_time = {'A': {}, 'B': {}, 'C': {}}
     over_time = {chr(65 + i): {} for i in range(len(processed_list))}
-    over_time_healthy = {chr(65 + i): {} for i in range(len(processed_list))}
-    over_time_sick = {chr(65 + i): {} for i in range(len(processed_list))}
+
     for i in ids:
         for index_pro_list, pro_list in enumerate(processed_list):
             # if i is in pro_list.index we will put 1
@@ -586,63 +749,21 @@ def check_where_id(processed_list):
     return over_time_df
 
 
-def plot():
-    real = pd.read_csv(f'/home/shanif3/Dyamic_data/GDM-original/src/Results/chi_square_test.csv', index_col=0)
-    shuffle = pd.read_csv('/home/shanif3/Dyamic_data/GDM-original/src/Results_shuffle/chi_square_test.csv', index_col=0)
-
-    real_p = real['p_value']
-    shuffle_p = shuffle['p_value']
-    real_chi2 = real['chi2']
-    shuffle_chi2 = shuffle['chi2']
-
-    real_p_transformed = -np.log10(real_p)
-    shuffle_p_transformed = -np.log10(shuffle_p)
-
-    # Create a DataFrame to keep p-values and chi2 together
-    real_combined = pd.DataFrame({
-        'p_value_transformed': real_p_transformed,
-        'chi2': real_chi2
-    })
-
-    shuffle_combined = pd.DataFrame({
-        'p_value_transformed': shuffle_p_transformed,
-        'chi2': shuffle_chi2
-    })
-
-    # real_filtered = real_combined[(real_combined['chi2'] >= 200) & (real_combined['chi2'] <= 600)]
-    # shuffle_filtered = shuffle_combined[(shuffle_combined['chi2'] >= 200) & (shuffle_combined['chi2'] <= 600)]
-
-    # Plot the data
-    plt.figure(figsize=(10, 6))
-    plt.scatter(real_combined['chi2'], real_combined['p_value_transformed'], label='Real Data', marker='x')
-    plt.scatter(shuffle_combined['chi2'], shuffle_combined['p_value_transformed'], label='Shuffle Data', marker='o')
-
-    plt.xlabel('Chi-squared value')
-    plt.ylabel('-log10(p-value)')
-    plt.title('Chi-squared values vs -log10(p-values) of Real and Shuffle Data')
-    # plt.xlim(200, 600)
-
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('ch2_vs_pval_plot.png')
-
-
-    #second option
-
+def plot(score_real, score_shuffle):
     # Order the values by size
-    real_p_sorted = np.sort(real_p_transformed)[::-1]
-    shuffle_p_sorted = np.sort(shuffle_p_transformed)[::-1]
+    real_p_sorted = np.sort(score_real)[::-1]
+    shuffle_p_sorted = np.sort(score_shuffle)[::-1]
 
     # Plot the data
     plt.figure(figsize=(10, 6))
     plt.plot(real_p_sorted, label='Real Data', marker='x')
     plt.plot(shuffle_p_sorted, label='Shuffle Data', marker='x')
     plt.xlabel('Ordered Index')
-    plt.ylabel('-log10(p-value)')
-    plt.title('-log10(p-values) of Real and Shuffle Data')
+    plt.ylabel('Score')
+    plt.title('Score of Real and Shuffle Data')
     plt.legend()
     plt.grid(True)
-    plt.savefig("p_val_plot.png")
+    plt.savefig("Score_real_vs_shuffle.png")
 
 
 def tag_shuffle(over_time, tag):
@@ -661,15 +782,48 @@ def tag_shuffle(over_time, tag):
     return tag
 
 
+def calculate_chi_square_score(data_frame):
+    x = data_frame['sick']
+    y = data_frame['healthy']
+    w = data_frame['not_in_sick']
+    z = data_frame['not_in_healthy']
+    total = x + y + w + z
+
+    rho_1 = (x + y) / total
+    rho_2 = (w + z) / total
+
+    x_e = rho_1 * (x + w)
+    y_e = rho_1 * (y + z)
+    w_e = rho_2 * (x + w)
+    z_e = rho_2 * (y + z)
+
+    scores = ((x - x_e) ** 2 / x_e) + ((y - y_e) ** 2 / y_e) + ((w - w_e) ** 2 / w_e) + ((z - z_e) ** 2 / z_e)
+
+    # Create a DataFrame to store graph numbers and scores
+    score_df = pd.DataFrame({
+        'graph_number': data_frame.index,
+        'sick': data_frame['sick'],
+        'healthy': data_frame['healthy'],
+        'not_in_sick': data_frame['not_in_sick'],
+        'not_in_healthy': data_frame['not_in_healthy'],
+        'score': scores
+    })
+
+    return score_df
+
+
 def main():
-    plot()
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
     shuffle = True
+    global folder
     if shuffle:
         folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results_shuffle'
     else:
         folder = '/home/shanif3/Dyamic_data/GDM-original/src/Results'
 
+    # score_real = calculate_chi_square_score(shuffle=False)
+    # score_shuffle = calculate_chi_square_score(shuffle=True)
+    # plot(score_real, score_shuffle)
     # Loading dataset time points
     timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
     timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
@@ -684,10 +838,10 @@ def main():
     threshold_p_value = 0.05
     k_comb = 4
 
-    run(timeA, timeB, timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb,shuffle)
+    run(timeA, timeB, timeC, taxonomy_levels, folder, tag, threshold_p_value, k_comb, shuffle)
 
 
-def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold_p_value, k_comb,shuffle):
+def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold_p_value, k_comb, shuffle):
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     print("Starting at :", current_time)
@@ -706,21 +860,193 @@ def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold
     over_time = check_where_id(processed)
     if shuffle:
         tag = tag_shuffle(over_time, tag)
-    graph(samples_all_time_dict_time)
-    combination_node(k_comb)
+    node_neighborhood_dict = graph(samples_all_time_dict_time)
+    combinations_graph_nodes = combination_node(k_comb)
     #
-    health_sick_counts_per_graph_table = checking_person(over_time, processed, all_samples_dict_time, tag)
+    health_sick_counts_per_graph_table = checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
+                                                         processed, all_samples_dict_time, tag)
     sick, healthy = count_sick_health(over_time, tag)
     comb = chi_square(health_sick_counts_per_graph_table, sick, healthy, p_value_threshold=threshold_p_value)
 
-    checking_the_sub_graph_over_all(over_time, processed, all_samples_dict_time, comb, tag)
-    plot()
+    checking_the_sub_graph_over_all(node_neighborhood_dict, over_time, processed, all_samples_dict_time, comb, tag)
+
+    # plot()
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     print("finished at :", current_time)
 
 
+def evaluate(top_k_range):
+    global folder
+    global taxonomy_levels
+    taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
+    global shuffle
+    shuffle = False
+    folder = '/home/shanif3/Dyamic_data/GDM-original/src/Diabi_train'
+    # timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
+    # timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
+    # timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
+    # tag = pd.read_csv(f"Data/tag.csv", index_col=0)
+    #
+    # # Fixing format
+    # timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
+    # timeB = timeB.rename(columns={col: col.split('.')[0] for col in timeB.columns})
+    # timeC = timeC.rename(columns={col: col.split('.')[0] for col in timeC.columns})
+
+    timeA= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_1.csv",index_col=0)
+    timeB= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_2.csv", index_col=0)
+    timeC= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_3.csv", index_col=0)
+    timeD= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_4.csv", index_col=0)
+    timeE= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_5.csv", index_col=0)
+    timeF= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_6.csv", index_col=0)
+    timeG= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_7.csv", index_col=0)
+    timeH= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_8.csv", index_col=0)
+    timeI= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_9.csv", index_col=0)
+    timeJ= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_10.csv", index_col=0)
+    timeK= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_11.csv", index_col=0)
+    tag= pd.read_csv("/home/shanif3/Codes/MIPMLP/data_to_compare/dynami/diabimmune/tag_filter.csv",index_col=0)
+
+    # processed = timeA, timeB, timeC
+    processed = timeA, timeB, timeC, timeD, timeE, timeF, timeG, timeH, timeI, timeJ, timeK
+
+    over_time = check_where_id(processed)
+
+    train_index, test_index = train_test_split(over_time.index, test_size=0.2)
+    train_tag = tag.loc[train_index]
+    test_tag = tag.loc[test_index]
+
+    processed_train = []
+    processed_test = []
+    for index, proc_time in enumerate(processed):
+        available_index_train = train_index.intersection(proc_time.index)
+        available_index_test = test_index.intersection(proc_time.index)
+
+        processed_train.append(proc_time.loc[available_index_train])
+        processed_test.append(proc_time.loc[available_index_test])
+
+    samples_all_time_dict_time_train, all_samples_dict_time_train = create_dicts(processed_train)
+    samples_all_time_dict_time_test, all_samples_dict_time_test = create_dicts(processed_test)
+
+    node_neighborhood_train = graph(all_samples_dict_time_train, processed_train)
+    # node_neighborhood_test = graph(samples_all_time_dict_time_test)
+
+    combinations_graph_train_nodes = combination_node(node_neighborhood_train, k=4)
+
+    # Get training data
+    train_data_frame, dict_num_comb_index_samples_train, filtered_combinations_graph_nodes = checking_person(
+        node_neighborhood_train,
+        combinations_graph_train_nodes,
+        over_time.loc[train_index], processed_train,
+        all_samples_dict_time_train,
+        train_tag)
+
+    combinations_df = pd.DataFrame(filtered_combinations_graph_nodes, columns=['bac1', 'bac2', 'bac3', 'bac4'])
+
+    train_data_frame.to_csv(f"{folder}/train_data.csv")
+    # Calculate chi-square scores for training data
+    scores = calculate_chi_square_score(train_data_frame)
+    # Ensure the sizes match
+    # assert len(combinations_df) == len(train_data_frame), "Sizes do not match!"
+
+    # merge to each graph its combination
+    scores = pd.concat([scores, combinations_df], axis=1)
+
+    scores.to_csv(f"{folder}/scores.csv")
+    # Sort graphs by their scores in descending order
+    sorted_indices = np.argsort(scores['score'])[::-1]
+
+    aucs = []
+    for k in range(1, top_k_range + 1):
+        # Select top K graphs
+        top_k_indices = sorted_indices[:k].values
+        top_k_comb_name = create_comb_names(top_k_indices, filtered_combinations_graph_nodes)
+
+        # when do model we will use this to take indexes of train top k
+        # # Train classifier on training data using top K graphs
+        # train_top_k_graph_data_frame = train_data_frame.iloc[top_k_indices]
+        # train_top_k_graph_index_dict = [dict_num_comb_index_samples_train[key] for key in
+        #                                 dict_num_comb_index_samples_train if key in top_k_indices]
+
+        # Getting the test_data for the selected comb from train using top_k_comb_name i changed here to
+        # node_neighborhood_train because there is times that the node_neighborhood doenst have the basteria because
+        # it doesnt have correlation with other bacteria, so we will take the original, train dict and check if the
+        # tag_index relvant to this comb using doct of the train
+        test_data_frame, dict_num_comb_index_samples_test = checking_person(node_neighborhood_train,
+                                                                            top_k_comb_name,
+                                                                            over_time=over_time.loc[test_index],
+                                                                            processed_list=processed_test,
+                                                                            dict_time=all_samples_dict_time_test,
+                                                                            tag=test_tag, mode='test')
+        # if the comb didnt detect any sick or healthy samples, so i have no rows in the dataframe- auc is 0
+        if test_data_frame.shape[0] == 0:
+            aucs.append(0)
+
+        else:
+            real_tag_list_comb, predicted_tag_list_comb = convert_dict_graph_index_to_tag(
+                dict_num_comb_index_samples_test,
+                tag)
+
+            auc = roc_auc_score(real_tag_list_comb, predicted_tag_list_comb)
+            aucs.append(auc)
+
+    plot_auc(aucs)
+
+
+def create_comb_names(top_k_indices, filtered_combinations_graph_nodes):
+    return [filtered_combinations_graph_nodes[idx] for idx in top_k_indices]
+
+
+def convert_dict_graph_index_to_tag(test_top_k_graph_index_dict, tag):
+    # merging all the default dict together, so we will get one dict for all.
+    merged_dict_comb = defaultdict(list)
+    # for comb_index in test_top_k_graph_index_dict:
+    for key, value in test_top_k_graph_index_dict.items():
+        merged_dict_comb[key].extend(value)
+
+    predicted_tag_list_comb = []
+    for key, values in merged_dict_comb.items():
+        # len_values; (int) indicates how many values we have in this key
+        len_values = len(values)
+        # if key =='sick' we will put 1 as the length of the values
+        if key == 'sick':
+            predicted_tag_list_comb.extend([1] * len_values)
+        # if key =='healthy' we will put 0 as the length of the values
+        elif key == 'healthy':
+            predicted_tag_list_comb.extend([0] * len_values)
+        # if key =='not_in_sick' we will put 0 as the length of the values, because we didnt identify it as sick- so we will put the opposite tag
+        elif key == "not_in_sick":
+            predicted_tag_list_comb.extend([0] * len_values)
+        # if key =='not_in_healthy' we will put 1 as the length of the values, because we didnt identify it as healthy- so we will put the opposite tag
+        elif key == 'not_in_healthy':
+            predicted_tag_list_comb.extend([1] * len_values)
+
+    merged_list_all_indexes_by_order = []
+    for key, value in merged_dict_comb.items():
+        merged_list_all_indexes_by_order.extend(merged_dict_comb[key])
+    real_tag_list_comb = [tag.loc[index][0] for index in merged_list_all_indexes_by_order]
+
+    return real_tag_list_comb, predicted_tag_list_comb
+
+
+def plot_auc(aucs, interval=5):
+    plt.figure(figsize=(12, 8))
+    plt.plot(range(1, len(aucs) + 1), aucs, marker='o', linestyle='-', color='b', markersize=6, linewidth=2)
+    plt.title('AUC Score vs. Top K Graphs', fontsize=16)
+    plt.xlabel('Top K Graphs', fontsize=14)
+    plt.ylabel('AUC Score', fontsize=14)
+    plt.xticks(range(1, len(aucs) + 1, interval), fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.grid(True, linestyle='--', linewidth=0.5)
+    plt.tight_layout()
+    plt.savefig(f"{folder}/auc_vs_top{len(aucs)}_comb.png", dpi=300)
+    plt.show()
+
+
 if __name__ == '__main__':
-    main()
+    # df = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/Results_train/scores.csv")
+    # chi = df['score']
+    # df['p_value'] = 1 - statss.chi2.sf(chi, 3)
+    # df.to_csv("see.csv")
+    evaluate(3)
 
 c = 0
