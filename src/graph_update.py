@@ -17,6 +17,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve, roc_auc_score
 import scipy.stats as statss
+from xgboost import XGBClassifier
 
 global taxonomy_levels
 global folder
@@ -27,42 +28,27 @@ def create_dicts(processed):
     Creating a dict for each time point, each dict contains 6 levels of taxonomy levels (except for kingdom) and each
     level contains its bacterias and its values.
     :param processed: tuple that contains all the processed data
-    :param mode: 'SameT' or 'nextT', default set to 'SameT'
+    :param mode: 'SameT' or 'nextT', default set to 'SameT'כ
     :return: dict_time, processed_list
     """
     # number_of time; indicates how many times we have
     number_of_time = len(processed)
     processed_list = list(processed)
 
-    # mutual_samples_over_time; (list) contains the samples that are all along the time points.
-    mutual_samples_over_time = processed[0].index
-    for i in range(1, number_of_time):
-        mutual_samples_over_time = mutual_samples_over_time.intersection(processed[i].index)
-    # processed_list; (list) processed with the mutual samples.
-    samples_all_time_processed_list = [df.loc[mutual_samples_over_time] for df in processed]
-    # all_same_shape; safety check that al the pr
-    all_same_shape = all(
-        df.shape[0] == samples_all_time_processed_list[0].shape[0] for df in samples_all_time_processed_list)
-    # if statement; to check that all the processed datasets having the same shape or mutual_samples_over_time is
-    # not empty
-    if not all_same_shape or len(mutual_samples_over_time) == 0:
-        sys.exit("Something wrong with the data. Existing the program")
-        # TODO: handle here !
-
-    # dict_time; (list) contains a dict for each time point.
-    samples_all_time_dict_time = [defaultdict(list) for _ in range(number_of_time)]
     # all_samples_dict_time; (list) contains all the samples values even if there are not in all-time points.
     all_samples_no_matter_time_dict_time = [defaultdict(list) for _ in range(number_of_time)]
 
     # Iterating over each processed data at each time point, for each sample (row)
-    for all_time_processed, all_time_dict_time, all_samples_processed, all_samples_dict_time in zip(
-            samples_all_time_processed_list, samples_all_time_dict_time, processed_list,
-            all_samples_no_matter_time_dict_time):
+    for all_samples_processed, all_samples_dict_time in tqdm(zip(processed_list, all_samples_no_matter_time_dict_time),
+                                                             total=len(processed_list)):
 
         # all_time_processed.index; each index represent a sample
         for sample in all_samples_processed.index:
             row = all_samples_processed.loc[sample]
-            row = row.to_frame().T
+            try:
+                row = row.to_frame().T
+            except:
+                c=0
 
             # micro2matrix; for each sample (row) we will translate its microbiome values and its cladogram into matrix
             array_of_imgs_sampleT, bact_names_sampleT, ordered_df_sampleT = samba.micro2matrix(row, folder='',
@@ -86,19 +72,12 @@ def create_dicts(processed):
                 for name, indices in zip(unique_names, unique_indices):
                     # to ignore names like '0.0' or ''
                     if name[0].isalpha():
-                        # all_time_dict_time and all_samples_dict_time; will contain for each bac its value
-                        # all_samples_dict_time include all_time_dict_time, since all_samples_dict_time is the
-                        # processed as is and all_samples_dict_time is just the samples that are consist across all
-                        # the time
-                        if sample in all_time_processed.index:
-                            if name not in all_time_dict_time:
-                                all_time_dict_time[name] = []
-                            all_time_dict_time[name].append(array_of_imgs_row_level[indices])
+                        # all_samples_dict_time; (dict) contains for each bacteria name its values over all the samples.
                         if name not in all_samples_dict_time:
                             all_samples_dict_time[name] = []
                         all_samples_dict_time[name].append(array_of_imgs_row_level[indices])
 
-    return samples_all_time_dict_time, all_samples_no_matter_time_dict_time
+    return all_samples_no_matter_time_dict_time
 
 
 def correlation_link(dict_level_num, level_num, list_dict_time, parents, distribution_corr, mode='SameT',
@@ -132,11 +111,12 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, distrib
     # adding to all_levels in 'level' row the values of the taxa from each time point
 
     if mode == 'SameT':
-        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.65,
+        # 0.65 and 0.7
+        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.6,
                                                           distribution_corr=distribution_corr)
     else:
         if processed is not None:
-            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.7,
+            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.6,
                                                               distribution_corr=distribution_corr)
 
     for pair in pairs_to_remove:
@@ -271,7 +251,7 @@ def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
     return pairs, pairs_to_remove, distribution_corr
 
 
-def graph(dict_time, processed):
+def graph(dict_time, processed,folder):
     """
     Building the graph. The workflow is by starting from mode='SameT' to collect correlations between bac at the same
     time point. Then, we will check mode= 'NextT' to collect correlations between bac at the current time points to
@@ -280,6 +260,7 @@ def graph(dict_time, processed):
     :param nextT_tuple: containing all_levels_nextT (list) and dict_next_time (list)
     :return:
     """
+    taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
     parents = None
     node_neighborhood = {}
@@ -577,18 +558,18 @@ def get_not_intersection_list(dict_num_comb_index_samples, intersection_counter,
 
 # By a given combination we will check the comb values all over the data
 def checking_the_sub_graph_over_all(node_neighborhood, over_time, processed, all_samples_dict_time, comb, tag):
-    for number_node, node in enumerate(comb):
-        time = []
-        for neighborhood in node_neighborhood[node]:
-            if next(iter(neighborhood)) in comb and next(iter(neighborhood)) is not node:
-
-                time_n = list(node_neighborhood[node][np.where == next(iter(neighborhood))].values())[0]['time']
-                time.append(time_n)
-                if len(time) == 3:
-                    break
-        if 'next' in time and 'same' in time:
-            time_n = 'both'
-            time.append(time_n)
+    # for number_node, node in enumerate(comb):
+    #     time = []
+    #     for neighborhood in node_neighborhood[node]:
+    #         if next(iter(neighborhood)) in comb and next(iter(neighborhood)) is not node:
+    #
+    #             time_n = list(node_neighborhood[node][np.where == next(iter(neighborhood))].values())[0]['time']
+    #             time.append(time_n)
+    #             if len(time) == 3:
+    #                 break
+    #     if 'next' in time and 'same' in time:
+    #         time_n = 'both'
+    #         time.append(time_n)
 
     times = [chr(65 + i) for i in range(len(processed))]
     rows_to_add = []
@@ -723,7 +704,7 @@ def combination_node(node_neighborhood, k=4):
     return combi
 
 
-def check_where_id(processed_list):
+def check_where_id(processed_list,folder):
     """
    A function that creates a matrix of samples over times, where 1 indicates that the sample exists at this time, otherwise 0
     :param processed_list: list with all the processed csv, where each processed csv points to a time.
@@ -883,33 +864,33 @@ def evaluate(top_k_range):
     global shuffle
     shuffle = False
     folder = '/home/shanif3/Dyamic_data/GDM-original/src/Diabi_train'
-    # timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
-    # timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
-    # timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
-    # tag = pd.read_csv(f"Data/tag.csv", index_col=0)
-    #
-    # # Fixing format
-    # timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
-    # timeB = timeB.rename(columns={col: col.split('.')[0] for col in timeB.columns})
-    # timeC = timeC.rename(columns={col: col.split('.')[0] for col in timeC.columns})
+    timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
+    timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
+    timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
+    tag = pd.read_csv(f"Data/tag.csv", index_col=0)
 
-    timeA= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_1.csv",index_col=0)
-    timeB= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_2.csv", index_col=0)
-    timeC= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_3.csv", index_col=0)
-    timeD= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_4.csv", index_col=0)
-    timeE= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_5.csv", index_col=0)
-    timeF= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_6.csv", index_col=0)
-    timeG= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_7.csv", index_col=0)
-    timeH= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_8.csv", index_col=0)
-    timeI= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_9.csv", index_col=0)
-    timeJ= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_10.csv", index_col=0)
-    timeK= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_11.csv", index_col=0)
-    tag= pd.read_csv("/home/shanif3/Codes/MIPMLP/data_to_compare/dynami/diabimmune/tag_filter.csv",index_col=0)
+    # Fixing format
+    timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
+    timeB = timeB.rename(columns={col: col.split('.')[0] for col in timeB.columns})
+    timeC = timeC.rename(columns={col: col.split('.')[0] for col in timeC.columns})
 
-    # processed = timeA, timeB, timeC
-    processed = timeA, timeB, timeC, timeD, timeE, timeF, timeG, timeH, timeI, timeJ, timeK
+    # timeA = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_1.csv", index_col=0)
+    # timeB = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_2.csv", index_col=0)
+    # timeC = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_3.csv", index_col=0)
+    # timeD = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_4.csv", index_col=0)
+    # timeE = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_5.csv", index_col=0)
+    # timeF = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_6.csv", index_col=0)
+    # timeG = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_7.csv", index_col=0)
+    # timeH = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_8.csv", index_col=0)
+    # timeI = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_9.csv", index_col=0)
+    # timeJ = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_10.csv", index_col=0)
+    # timeK = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_11.csv", index_col=0)
+    # tag = pd.read_csv("/home/shanif3/Codes/MIPMLP/data_to_compare/dynami/diabimmune/tag_filter.csv", index_col=0)
 
-    over_time = check_where_id(processed)
+    processed = timeA, timeB, timeC
+    # processed = timeA, timeB, timeC, timeD, timeE, timeF, timeG, timeH, timeI, timeJ, timeK
+
+    over_time = check_where_id(processed,folder)
 
     train_index, test_index = train_test_split(over_time.index, test_size=0.2)
     train_tag = tag.loc[train_index]
@@ -921,11 +902,12 @@ def evaluate(top_k_range):
         available_index_train = train_index.intersection(proc_time.index)
         available_index_test = test_index.intersection(proc_time.index)
 
-        processed_train.append(proc_time.loc[available_index_train])
-        processed_test.append(proc_time.loc[available_index_test])
+        #groupby- in order to drop duplicates
+        processed_train.append(proc_time.loc[available_index_train].groupby(level=0).first())
+        processed_test.append(proc_time.loc[available_index_test].groupby(level=0).first())
 
-    samples_all_time_dict_time_train, all_samples_dict_time_train = create_dicts(processed_train)
-    samples_all_time_dict_time_test, all_samples_dict_time_test = create_dicts(processed_test)
+    all_samples_dict_time_train = create_dicts(processed_train)
+    all_samples_dict_time_test = create_dicts(processed_test)
 
     node_neighborhood_train = graph(all_samples_dict_time_train, processed_train)
     # node_neighborhood_test = graph(samples_all_time_dict_time_test)
@@ -986,6 +968,7 @@ def evaluate(top_k_range):
                 dict_num_comb_index_samples_test,
                 tag)
 
+
             auc = roc_auc_score(real_tag_list_comb, predicted_tag_list_comb)
             aucs.append(auc)
 
@@ -1040,7 +1023,6 @@ def plot_auc(aucs, interval=5):
     plt.tight_layout()
     plt.savefig(f"{folder}/auc_vs_top{len(aucs)}_comb.png", dpi=300)
     plt.show()
-
 
 if __name__ == '__main__':
     # df = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/Results_train/scores.csv")
