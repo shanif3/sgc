@@ -4,7 +4,7 @@ import sys
 from collections import defaultdict, Counter
 from datetime import datetime
 from functools import reduce
-from itertools import combinations
+from itertools import combinations, product, combinations_with_replacement
 import math
 import numpy as np
 import pandas as pd
@@ -14,7 +14,7 @@ from scipy.stats.mstats import spearmanr
 from scipy.stats import chi2_contingency
 import statsmodels.stats.multitest as smt
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import roc_curve, roc_auc_score
 import scipy.stats as statss
 from xgboost import XGBClassifier
@@ -48,7 +48,7 @@ def create_dicts(processed):
             try:
                 row = row.to_frame().T
             except:
-                c=0
+                c = 0
 
             # micro2matrix; for each sample (row) we will translate its microbiome values and its cladogram into matrix
             array_of_imgs_sampleT, bact_names_sampleT, ordered_df_sampleT = samba.micro2matrix(row, folder='',
@@ -105,18 +105,18 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, distrib
     if parents is not None:
         mutual_taxa = [key for key in dict_in_level[0].keys() if any(key.startswith(parent) for parent in parents)]
     elif parents is None:
-        # dict_in_level already consist mutual taxa (based on create_dicts function)
+        # dict_in_level already consist mutual taxa (based on create_dicts function). dict_in_level[0]- because all the dict has the same amount of bacteria
         mutual_taxa = dict_in_level[0].keys()
 
     # adding to all_levels in 'level' row the values of the taxa from each time point
 
     if mode == 'SameT':
         # 0.65 and 0.7
-        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.6,
+        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.75,
                                                           distribution_corr=distribution_corr)
     else:
         if processed is not None:
-            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.6,
+            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.8,
                                                               distribution_corr=distribution_corr)
 
     for pair in pairs_to_remove:
@@ -161,8 +161,9 @@ def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold, distribution_co
 
 
 def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
-    # pairs = list(product(selected_bac_same_T, names))
-    pairs = list(combinations(mutual_taxa, 2))
+    # will return [('a', 'a'), ('a', 'b'), ('a', 'c'), ('b', 'b'), ('b', 'c'), ('c', 'c')]
+    pairs = list(combinations_with_replacement(mutual_taxa, 2))
+    pairs_to_return = []
     pairs_to_remove = []
     dict_t = {}
     dict_t_1 = {}
@@ -189,32 +190,36 @@ def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
         if not bac1_exist or not bac2_exist:
             for pair_time in range(number_pairs_of_time):
                 mutual_index_t = processed[pair_time].index.intersection(processed[pair_time + 1].index)
-                mutual_index_location = np.where(processed[pair_time].index.isin(mutual_index_t))[0]
+                mutual_index_location_at_t = np.where(processed[pair_time].index.isin(mutual_index_t))[0]
+                mutual_index_location_at_t1 = np.where(processed[pair_time + 1].index.isin(mutual_index_t))[0]
+
                 # flag_first; (bool) used to indicates if we are in the first time step, if so i want to add the value just for list1_t. so i will compare between T1 T2.
                 if flag_first:
                     # adding T1 to list_bac1_t and T2 to list_bac2_t_1
                     if not bac1_exist:
-                        list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                        list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location_at_t])
                     if not bac2_exist:
-                        list_bac2_t_1.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                        list_bac2_t_1.extend(
+                            [dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
 
                     # adding T1 to list_bac2_t and T2 to list_bac1_t_1
                     if not bac2_exist:
-                        list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                        list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location_at_t])
                     if not bac1_exist:
-                        list_bac1_t_1.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                        list_bac1_t_1.extend(
+                            [dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
                     flag_first = False
                     continue
 
                 if not bac1_exist:
-                    list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                    list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location_at_t])
                 if not bac2_exist:
-                    list_bac2_t_1.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                    list_bac2_t_1.extend([dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
 
                 if not bac2_exist:
-                    list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location])
+                    list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location_at_t])
                 if not bac1_exist:
-                    list_bac1_t_1.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location])
+                    list_bac1_t_1.extend([dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
 
         if name1 not in dict_t:
             dict_t[name1] = []
@@ -234,24 +239,31 @@ def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
         # [T1 T2] between [T2 T3]
         corr, pval = spearmanr(list_bac1_t, list_bac2_t_1)
         distribution_corr.append(corr)
-        if corr < 0.5 or pval > 0.05:
-            # pval == 0 or
-            pairs_to_remove.append((name1, name2))
+        # if corr < 0.5 or pval > 0.05:
+        # pval == 0 or
+        if corr >= threshold or pval < 0.05:
+            pairs_to_return.append((name1, name2))
+        if corr >= 0.9:
+            c = 0
 
         # [T2 T3] between [T1 T2]
         corr, pval = spearmanr(list_bac2_t, list_bac1_t_1)
         distribution_corr.append(corr)
-        if corr < threshold or pval > 0.05:
-            # or pval == 0
-            pairs_to_remove.append((name1, name2))
+        # if corr < threshold or pval > 0.05:
+        #     # or pval == 0
+        #     pairs_to_remove.append((name1, name2))
+        if corr >= threshold or pval < 0.05:
+            pairs_to_return.append((name2, name1))
+        if corr >= 0.9:
+            c = 0
 
     # in order if we have (a,a) twice.
-    pairs_to_remove = set(pairs_to_remove)
+    pairs_to_return = set(pairs_to_return)
 
-    return pairs, pairs_to_remove, distribution_corr
+    return pairs_to_return, pairs_to_remove, distribution_corr
 
 
-def graph(dict_time, processed,folder):
+def graph(dict_time, processed):
     """
     Building the graph. The workflow is by starting from mode='SameT' to collect correlations between bac at the same
     time point. Then, we will check mode= 'NextT' to collect correlations between bac at the current time points to
@@ -302,14 +314,14 @@ def graph(dict_time, processed,folder):
                                                                                        mode='NextT',
                                                                                        processed=processed)
 
-        ###### just for checking the sub graph im editing that the directed edges will be undircted
+        ###### its directed edge, u has an impact to time t+1 on v
+        # because i have (u,v) (v,u)- so i  will add it once
         for u, v in directed_pairs:
             if u not in node_neighborhood:
                 node_neighborhood[u] = []
             if v not in node_neighborhood:
                 node_neighborhood[v] = []
             node_neighborhood[u].append({v: {'time': 'next', 'level': 'same'}})
-            node_neighborhood[v].append({u: {'time': 'next', 'level': 'same'}})
 
         # taking the children from the sameT and the nextT and union them
         children = set(selected_bac_same_T | selected_bac_next_T)
@@ -669,12 +681,14 @@ def combination_node(node_neighborhood, k=4):
 
     :param k: number of nodes in sub graph
     :param folder: path to folder containing my_dict.pickle
-    :return: list of valid node combinations
+    :return: list of valid node_time_same combinations
     """
 
     combi = []
     c = 0
     nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
+    # node_combinations = list(combinations(nodes, k))
+
     node_combinations = list(combinations(nodes, k))
 
     with tqdm(total=len(node_combinations)) as pbar:
@@ -682,29 +696,85 @@ def combination_node(node_neighborhood, k=4):
             # Update progress bar
             pbar.update(1)
 
-            # count_child_parent_connections; (int) indicates how many child-parent connections we have.
-            # If we have more than 2, we will not use this combination- sub graph.
+            # count_child_parent_connections: (int) indicates how many child-parent connections we have.
+            # If we have more than 2, we will not use this combination- subgraph.
             count_child_parent_connections = sum(
                 1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
-                j in dict_n.keys() and dict_n[j]['level'] == 'child')
+                j in dict_n and dict_n[j]['level'] == 'child'
+            )
             if count_child_parent_connections > 2:
                 continue
 
-            # num_edges; (int) indicates how many connections we have among the nodes in such comb, we want more than
-            # 4 connection in order to take it as sub graph.
+            # num_edges: (int) indicates how many connections we have among the nodes in such comb,
+            # we want more than 4 connections in order to take it as subgraph.
             num_edges = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if j in dict_n.keys())
+                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if j in dict_n
+            )
 
-            if num_edges >= 4:
+            if num_edges >= k:
                 c += 1
-                combi.append(node_comb)
+                # Save combination with features
+                combination_with_features = {}
+                for node_time_same in node_comb:
+                    features = []
+                    for conn in node_neighborhood[node_time_same]:
+                        for key, value in conn.items():
+                            if key in node_comb and (key, value['time'], value['level']) not in features:
+                                features.append((key, value['time'], value['level']))
+                    if node_time_same not in combination_with_features:
+                        combination_with_features[node_time_same] = []
+                    combination_with_features[node_time_same].append(features)
+                combi.append(combination_with_features)
 
     print(f"Found {c} valid combinations.")
 
     return combi
 
 
-def check_where_id(processed_list,folder):
+def combi(node_neighborhood, k=4):
+    """
+        Generate combinations of nodes with at least 4 connections among them.
+        Save features (time and level) for each node in the combination.
+
+        :param node_neighborhood: Dictionary of nodes and their connections
+        :param k: Number of nodes in subgraph
+        :return: List of valid node combinations with features
+        """
+    combi = []
+    nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
+    node_combinations = combinations(nodes, k)
+
+    with tqdm(total=sum(1 for _ in combinations(nodes, k))) as pbar:
+        for node_comb in node_combinations:
+            pbar.update(1)
+
+            # Count child-parent connections
+            count_child_parent_connections = sum(
+                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
+                any(j in d and d[j]['level'] == 'child' for d in dict_n)
+            )
+            if count_child_parent_connections > 2:
+                continue
+
+            # Count edges among the nodes
+            num_edges = sum(
+                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
+                any(j in d for d in dict_n)
+            )
+            if num_edges >= 4:
+                # Save combination with features
+                combination_with_features = []
+                for node in node_comb:
+                    features = []
+                    for conn in node_neighborhood[node]:
+                        for key, value in conn.items():
+                            if key in node_comb and (key, value['time'], value['level']) not in features:
+                                features.append((key, value['time'], value['level']))
+                    combination_with_features.append((node, features))
+                combi.append(combination_with_features)
+
+
+def check_where_id(processed_list, folder):
     """
    A function that creates a matrix of samples over times, where 1 indicates that the sample exists at this time, otherwise 0
     :param processed_list: list with all the processed csv, where each processed csv points to a time.
@@ -890,7 +960,7 @@ def evaluate(top_k_range):
     processed = timeA, timeB, timeC
     # processed = timeA, timeB, timeC, timeD, timeE, timeF, timeG, timeH, timeI, timeJ, timeK
 
-    over_time = check_where_id(processed,folder)
+    over_time = check_where_id(processed, folder)
 
     train_index, test_index = train_test_split(over_time.index, test_size=0.2)
     train_tag = tag.loc[train_index]
@@ -902,7 +972,7 @@ def evaluate(top_k_range):
         available_index_train = train_index.intersection(proc_time.index)
         available_index_test = test_index.intersection(proc_time.index)
 
-        #groupby- in order to drop duplicates
+        # groupby- in order to drop duplicates
         processed_train.append(proc_time.loc[available_index_train].groupby(level=0).first())
         processed_test.append(proc_time.loc[available_index_test].groupby(level=0).first())
 
@@ -922,6 +992,11 @@ def evaluate(top_k_range):
         all_samples_dict_time_train,
         train_tag)
 
+    processed_train = pd.concat(processed_train)
+    processed_test = pd.concat(processed_test)
+    y_train = get_tag(processed_train, tag)
+    y_test = get_tag(processed_test, tag)
+
     combinations_df = pd.DataFrame(filtered_combinations_graph_nodes, columns=['bac1', 'bac2', 'bac3', 'bac4'])
 
     train_data_frame.to_csv(f"{folder}/train_data.csv")
@@ -934,45 +1009,85 @@ def evaluate(top_k_range):
     scores = pd.concat([scores, combinations_df], axis=1)
 
     scores.to_csv(f"{folder}/scores.csv")
-    # Sort graphs by their scores in descending order
-    sorted_indices = np.argsort(scores['score'])[::-1]
+    # Sort graphs by their scores in descending order and get top 10 most significant combinations
+    sorted_indices = np.argsort(scores['score'])[::-1][:10]
+    best_score = 0
+    top_k_comb = [combinations_graph_train_nodes[i] for i in sorted_indices]
+    for comb in top_k_comb:
+        # comb= add_taxonomy_levels_comb(comb)
 
-    aucs = []
-    for k in range(1, top_k_range + 1):
-        # Select top K graphs
-        top_k_indices = sorted_indices[:k].values
-        top_k_comb_name = create_comb_names(top_k_indices, filtered_combinations_graph_nodes)
+        X_train_comb = all_samples_dict_time_train[comb]
+        X_test_comb = all_samples_dict_time_test[comb]
 
-        # when do model we will use this to take indexes of train top k
-        # # Train classifier on training data using top K graphs
-        # train_top_k_graph_data_frame = train_data_frame.iloc[top_k_indices]
-        # train_top_k_graph_index_dict = [dict_num_comb_index_samples_train[key] for key in
-        #                                 dict_num_comb_index_samples_train if key in top_k_indices]
+        # Initialize and train the XGBoost classifier
+        model = XGBClassifier()
 
-        # Getting the test_data for the selected comb from train using top_k_comb_name i changed here to
-        # node_neighborhood_train because there is times that the node_neighborhood doenst have the basteria because
-        # it doesnt have correlation with other bacteria, so we will take the original, train dict and check if the
-        # tag_index relvant to this comb using doct of the train
-        test_data_frame, dict_num_comb_index_samples_test = checking_person(node_neighborhood_train,
-                                                                            top_k_comb_name,
-                                                                            over_time=over_time.loc[test_index],
-                                                                            processed_list=processed_test,
-                                                                            dict_time=all_samples_dict_time_test,
-                                                                            tag=test_tag, mode='test')
-        # if the comb didnt detect any sick or healthy samples, so i have no rows in the dataframe- auc is 0
-        if test_data_frame.shape[0] == 0:
-            aucs.append(0)
+        # Evaluate the model using cross-validation
+        scores = cross_val_score(model, X_train_comb, y_train, cv=5)
+        mean_score = scores.mean()
 
-        else:
-            real_tag_list_comb, predicted_tag_list_comb = convert_dict_graph_index_to_tag(
-                dict_num_comb_index_samples_test,
-                tag)
+        # Update the best combination if the current one is better
+        if mean_score > best_score:
+            best_combination = comb
+            best_score = mean_score
 
+    # Print the best combination and its score
+    print(f'Best combination: {best_combination}')
+    print(f'Best cross-validation score: {best_score:.2f}')
 
-            auc = roc_auc_score(real_tag_list_comb, predicted_tag_list_comb)
-            aucs.append(auc)
+    # Validate the best combination on the test set
+    X_train_best = processed_train[list(best_combination)]
+    X_test_best = processed_test[list(best_combination)]
+    final_model = XGBClassifier()
+    final_model.fit(X_train_best, y_train)
+    test_score = final_model.score(X_test_best, y_test)
 
-    plot_auc(aucs)
+    print(f'Test set accuracy with best combination: {test_score:.2f}')
+
+    # Optional: Plot feature importance for the best combination
+    from xgboost import plot_importance
+    import matplotlib.pyplot as plt
+    # get the importance of the feature-->
+
+    plot_importance(final_model)
+    plt.show()
+
+    # aucs = []
+    # for k in range(1, top_k_range + 1):
+    #     # Select top K graphs
+    #     top_k_indices = sorted_indices[:k].values
+    #     top_k_comb_name = create_comb_names(top_k_indices, filtered_combinations_graph_nodes)
+    #
+    #     # when do model we will use this to take indexes of train top k
+    #     # # Train classifier on training data using top K graphs
+    #     # train_top_k_graph_data_frame = train_data_frame.iloc[top_k_indices]
+    #     # train_top_k_graph_index_dict = [dict_num_comb_index_samples_train[key] for key in
+    #     #                                 dict_num_comb_index_samples_train if key in top_k_indices]
+    #
+    #     # Getting the test_data for the selected comb from train using top_k_comb_name i changed here to
+    #     # node_neighborhood_train because there is times that the node_neighborhood doenst have the basteria because
+    #     # it doesnt have correlation with other bacteria, so we will take the original, train dict and check if the
+    #     # tag_index relvant to this comb using doct of the train
+    #     test_data_frame, dict_num_comb_index_samples_test = checking_person(node_neighborhood_train,
+    #                                                                         top_k_comb_name,
+    #                                                                         over_time=over_time.loc[test_index],
+    #                                                                         processed_list=processed_test,
+    #                                                                         dict_time=all_samples_dict_time_test,
+    #                                                                         tag=test_tag, mode='test')
+    #     # if the comb didnt detect any sick or healthy samples, so i have no rows in the dataframe- auc is 0
+    #     if test_data_frame.shape[0] == 0:
+    #         aucs.append(0)
+    #
+    #     else:
+    #         real_tag_list_comb, predicted_tag_list_comb = convert_dict_graph_index_to_tag(
+    #             dict_num_comb_index_samples_test,
+    #             tag)
+    #
+    #
+    #         auc = roc_auc_score(real_tag_list_comb, predicted_tag_list_comb)
+    #         aucs.append(auc)
+    #
+    # plot_auc(aucs)
 
 
 def create_comb_names(top_k_indices, filtered_combinations_graph_nodes):
@@ -1023,6 +1138,30 @@ def plot_auc(aucs, interval=5):
     plt.tight_layout()
     plt.savefig(f"{folder}/auc_vs_top{len(aucs)}_comb.png", dpi=300)
     plt.show()
+
+
+def get_tag(processed_train, tag):
+    y_train = []
+    for index in processed_train.index:
+        y_train.append(tag.loc[index])
+    return y_train
+
+
+def add_taxonomy_levels_comb(comb):
+    taxonomy = ['k__', ';p__', ';c__', ';o__', ';f__', ';g__', ';s__']
+    all = []
+    for node_comb in comb:
+        node_name = ''
+        last_index = 0
+        all_nodes = node_comb.split(';')
+        for index, node in enumerate(all_nodes):
+            node_name += taxonomy[index] + node
+            last_index = index
+        for index in range(last_index, len(taxonomy_levels)):
+            node_name += taxonomy[index]
+        all.append(node_name)
+    return all
+
 
 if __name__ == '__main__':
     # df = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/Results_train/scores.csv")
