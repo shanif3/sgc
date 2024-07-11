@@ -112,7 +112,7 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, distrib
 
     if mode == 'SameT':
         # 0.65 and 0.7
-        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.75,
+        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.8,
                                                           distribution_corr=distribution_corr)
     else:
         if processed is not None:
@@ -194,32 +194,15 @@ def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
                 mutual_index_location_at_t1 = np.where(processed[pair_time + 1].index.isin(mutual_index_t))[0]
 
                 # flag_first; (bool) used to indicates if we are in the first time step, if so i want to add the value just for list1_t. so i will compare between T1 T2.
-                if flag_first:
-                    # adding T1 to list_bac1_t and T2 to list_bac2_t_1
-                    if not bac1_exist:
-                        list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location_at_t])
-                    if not bac2_exist:
-                        list_bac2_t_1.extend(
-                            [dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
-
-                    # adding T1 to list_bac2_t and T2 to list_bac1_t_1
-                    if not bac2_exist:
-                        list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location_at_t])
-                    if not bac1_exist:
-                        list_bac1_t_1.extend(
-                            [dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
-                    flag_first = False
-                    continue
-
+                # adding T1 to list_bac1_t and T2 to list_bac2_t_1
                 if not bac1_exist:
+                    # adding name1 at time t (same) to list_bac1_t
                     list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location_at_t])
-                if not bac2_exist:
-                    list_bac2_t_1.extend([dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
-
+                    # adding name1 at time t+1 (next) to list_bac1_t_1
+                    list_bac1_t_1.extend([dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
                 if not bac2_exist:
                     list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location_at_t])
-                if not bac1_exist:
-                    list_bac1_t_1.extend([dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
+                    list_bac2_t_1.extend([dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
 
         if name1 not in dict_t:
             dict_t[name1] = []
@@ -342,16 +325,18 @@ def graph(dict_time, processed):
     plt.title('Distribution of Spearman Correlations same')
     plt.xlabel('Correlation')
     plt.ylabel('Frequency')
+    plt.yscale('log')
     plt.savefig(f"{folder}.dist_same.png")
     plt.show()
     plt.hist(distribution_corr_next, bins=10, edgecolor='black')
     plt.title('Distribution of Spearman Correlations next')
+    plt.yscale('log')
     plt.xlabel('Correlation')
     plt.ylabel('Frequency')
     plt.savefig(f"{folder}/dist_next.png")
     plt.show()
-    with open(f'{folder}/my_dict.pickle', 'wb') as f:
-        pickle.dump(node_neighborhood, f)
+    # with open(f'{folder}/my_dict.pickle', 'wb') as f:
+    #     pickle.dump(node_neighborhood, f)
     return node_neighborhood
 
 
@@ -689,9 +674,9 @@ def combination_node(node_neighborhood, k=4):
     nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
     # node_combinations = list(combinations(nodes, k))
 
-    node_combinations = list(combinations(nodes, k))
-
-    with tqdm(total=len(node_combinations)) as pbar:
+    node_combinations = combinations(nodes, k)
+    total_combinations = math.comb(len(nodes), k)
+    with tqdm(total=total_combinations) as pbar:
         for node_comb in node_combinations:
             # Update progress bar
             pbar.update(1)
