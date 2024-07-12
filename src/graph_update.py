@@ -80,8 +80,8 @@ def create_dicts(processed):
     return all_samples_no_matter_time_dict_time
 
 
-def correlation_link(dict_level_num, level_num, list_dict_time, parents, distribution_corr, mode='SameT',
-                     processed=None):
+def correlation_link(level_num, list_dict_time, distribution_corr, mode='SameT',
+                     parents=None, processed=None):
     """
 
     :param distribution_corr:
@@ -99,9 +99,6 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, distrib
         filtered_dict = {taxa: values for taxa, values in dict_time.items() if taxa.count(";") == level_num}
         dict_in_level.append(filtered_dict)
 
-    # parents is not None; meaning that we have ancestor, and we want to take and continue building the graph based
-    # on its children.
-    # mutual_taxa; contains the mutual taxa along all the time points.
     if parents is not None:
         mutual_taxa = [key for key in dict_in_level[0].keys() if any(key.startswith(parent) for parent in parents)]
     elif parents is None:
@@ -112,22 +109,19 @@ def correlation_link(dict_level_num, level_num, list_dict_time, parents, distrib
 
     if mode == 'SameT':
         # 0.65 and 0.7
-        pairs, pairs_to_remove, distribution_corr = sameT(mutual_taxa, dict_level_num, dict_in_level, threshold=0.8,
-                                                          distribution_corr=distribution_corr)
-    else:
+        pairs_to_return, distribution_corr = sameT(mutual_taxa, dict_in_level, threshold=0.6,
+                                                   distribution_corr=distribution_corr)
+
+    elif mode == 'NextT':
         if processed is not None:
-            pairs, pairs_to_remove, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.8,
-                                                              distribution_corr=distribution_corr)
+            pairs_to_return, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.5,
+                                                       distribution_corr=distribution_corr)
 
-    for pair in pairs_to_remove:
-        pairs.remove(pair)
-
-    selected_bac_same_T = set([item for sublist in pairs for item in sublist])
-
-    return pairs, selected_bac_same_T, distribution_corr
+    return pairs_to_return, distribution_corr
 
 
-def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold, distribution_corr):
+def sameT(mutual_taxa, dict_in_level, threshold, distribution_corr):
+    dict_level_num = {}
     for name in mutual_taxa:
         # taxa_value; (list) contains the bac values along the time points
         taxa_value = []
@@ -142,108 +136,115 @@ def sameT(mutual_taxa, dict_level_num, dict_in_level, threshold, distribution_co
         # all_levels[level]; contains all the bac names with their values along the time points
 
     names = list(dict_level_num.keys())
-    pairs = list(combinations(names, 2))
-    pairs_to_remove = []
-    # loop over all pairs combinations for correlation check
-    for name1, name2 in pairs:
-        array1 = dict_level_num[name1]
-        array2 = dict_level_num[name2]
-        # using spearman correlation- to address a correlation
-        corr, pval = spearmanr(array1, array2)
-        distribution_corr.append(corr)
+    pairs = combinations(names, 2)
+    pairs_to_return = []
+    total_combinations = math.comb(len(names), 2)
 
-        # pairs_to_remove; contains pairs that below the threshold and pval is 0 or above 0.05
-        if corr < threshold or pval > 0.05:
-            # pval == 0 or
-            pairs_to_remove.append((name1, name2))
+    with tqdm(total=total_combinations) as pbar:
+        # loop over all pairs combinations for correlation check
+        for name1, name2 in pairs:
+            pbar.update(1)
+            array1 = dict_level_num[name1]
+            array2 = dict_level_num[name2]
+            # using spearman correlation- to address a correlation
+            corr, pval = spearmanr(array1, array2)
+            distribution_corr.append(corr)
 
-    return pairs, pairs_to_remove, distribution_corr
+            # pairs_to_remove; contains pairs that below the threshold and pval is 0 or above 0.05
+            if corr >= threshold and pval < 0.05:
+                pairs_to_return.append((name1, name2))
+
+    return pairs_to_return, distribution_corr
 
 
 def nextT(mutual_taxa, dict_in_level, processed, threshold, distribution_corr):
     # will return [('a', 'a'), ('a', 'b'), ('a', 'c'), ('b', 'b'), ('b', 'c'), ('c', 'c')]
     pairs = list(combinations_with_replacement(mutual_taxa, 2))
     pairs_to_return = []
-    pairs_to_remove = []
     dict_t = {}
     dict_t_1 = {}
 
     # number_of_pairs_time; (int) number of time pairs, for example we have 4 time steps, so we have 3 pairs of times: (T1,T2)(T2,T3),(T3,T4)
     number_pairs_of_time = len(dict_in_level) - 1
-    # Iterating over all the pairs, and checking for spearman correlation
-    for name1, name2 in pairs:
-        list_bac1_t = dict_t.get(name1, [])
-        list_bac2_t_1 = dict_t_1.get(name2, [])
 
-        list_bac2_t = dict_t.get(name2, [])
-        list_bac1_t_1 = dict_t_1.get(name1, [])
-        bac1_exist = False
-        bac2_exist = False
-        if list_bac1_t != [] and list_bac1_t_1 != []:
-            bac1_exist = True
+    with tqdm(total=len(pairs)) as pbar:
+        # Iterating over all the pairs, and checking for spearman correlation
+        for name1, name2 in pairs:
+            pbar.update(1)
+            list_bac1_t = dict_t.get(name1, [])
+            list_bac2_t_1 = dict_t_1.get(name2, [])
+            list_bac2_t = dict_t.get(name2, [])
+            list_bac1_t_1 = dict_t_1.get(name1, [])
+            bac1_exist = False
+            bac2_exist = False
+            if list_bac1_t != [] and list_bac1_t_1 != []:
+                bac1_exist = True
 
-        if list_bac2_t != [] and list_bac2_t_1 != []:
-            bac2_exist = True
+            if list_bac2_t != [] and list_bac2_t_1 != []:
+                bac2_exist = True
 
-        flag_first = True
-        # checking if the lists are empty or they got the value from the dict.
-        if not bac1_exist or not bac2_exist:
-            for pair_time in range(number_pairs_of_time):
-                mutual_index_t = processed[pair_time].index.intersection(processed[pair_time + 1].index)
-                mutual_index_location_at_t = np.where(processed[pair_time].index.isin(mutual_index_t))[0]
-                mutual_index_location_at_t1 = np.where(processed[pair_time + 1].index.isin(mutual_index_t))[0]
+            flag_first = True
+            # checking if the lists are empty or they got the value from the dict.
+            if not bac1_exist or not bac2_exist:
+                for pair_time_t in range(number_pairs_of_time):
+                    mutual_index_t = processed[pair_time_t].index.intersection(processed[pair_time_t + 1].index)
+                    mutual_index_location_at_t = np.where(processed[pair_time_t].index.isin(mutual_index_t))[0]
+                    mutual_index_location_at_t1 = np.where(processed[pair_time_t + 1].index.isin(mutual_index_t))[0]
 
-                # flag_first; (bool) used to indicates if we are in the first time step, if so i want to add the value just for list1_t. so i will compare between T1 T2.
-                # adding T1 to list_bac1_t and T2 to list_bac2_t_1
-                if not bac1_exist:
-                    # adding name1 at time t (same) to list_bac1_t
-                    list_bac1_t.extend([dict_in_level[pair_time][name1][i] for i in mutual_index_location_at_t])
-                    # adding name1 at time t+1 (next) to list_bac1_t_1
-                    list_bac1_t_1.extend([dict_in_level[pair_time + 1][name1][i] for i in mutual_index_location_at_t1])
-                if not bac2_exist:
-                    list_bac2_t.extend([dict_in_level[pair_time][name2][i] for i in mutual_index_location_at_t])
-                    list_bac2_t_1.extend([dict_in_level[pair_time + 1][name2][i] for i in mutual_index_location_at_t1])
+                    # flag_first; (bool) used to indicates if we are in the first time step, if so i want to add the value just for list1_t. so i will compare between T1 T2.
+                    # adding T1 to list_bac1_t and T2 to list_bac2_t_1
+                    if not bac1_exist:
+                        # adding name1 at time t (same) to list_bac1_t
+                        list_bac1_t.extend([dict_in_level[pair_time_t][name1][i] for i in mutual_index_location_at_t])
+                        # adding name1 at time t+1 (next) to list_bac1_t_1
+                        list_bac1_t_1.extend(
+                            [dict_in_level[pair_time_t + 1][name1][i] for i in mutual_index_location_at_t1])
+                    if not bac2_exist:
+                        list_bac2_t.extend([dict_in_level[pair_time_t][name2][i] for i in mutual_index_location_at_t])
+                        list_bac2_t_1.extend(
+                            [dict_in_level[pair_time_t + 1][name2][i] for i in mutual_index_location_at_t1])
 
-        if name1 not in dict_t:
-            dict_t[name1] = []
-            dict_t[name1] = list_bac1_t
-        if name2 not in dict_t:
-            dict_t[name2] = []
-            dict_t[name2] = list_bac2_t
+            if name1 not in dict_t:
+                dict_t[name1] = []
+                dict_t[name1] = list_bac1_t
+            if name2 not in dict_t:
+                dict_t[name2] = []
+                dict_t[name2] = list_bac2_t
 
-        if name1 not in dict_t_1:
-            dict_t_1[name1] = []
-            dict_t_1[name1] = list_bac1_t_1
-        if name2 not in dict_t_1:
-            dict_t_1[name2] = []
-            dict_t_1[name2] = list_bac2_t_1
+            if name1 not in dict_t_1:
+                dict_t_1[name1] = []
+                dict_t_1[name1] = list_bac1_t_1
+            if name2 not in dict_t_1:
+                dict_t_1[name2] = []
+                dict_t_1[name2] = list_bac2_t_1
 
-        # Compute the Spearman correlation between the pairs
-        # [T1 T2] between [T2 T3]
-        corr, pval = spearmanr(list_bac1_t, list_bac2_t_1)
-        distribution_corr.append(corr)
-        # if corr < 0.5 or pval > 0.05:
-        # pval == 0 or
-        if corr >= threshold or pval < 0.05:
-            pairs_to_return.append((name1, name2))
-        if corr >= 0.9:
-            c = 0
+            # Compute the Spearman correlation between the pairs
+            # [T1 T2] between [T2 T3]
+            corr, pval = spearmanr(list_bac1_t, list_bac2_t_1)
+            distribution_corr.append(corr)
+            # if corr < 0.5 or pval > 0.05:
+            # pval == 0 or
+            if corr >= threshold and pval < 0.05:
+                pairs_to_return.append((name1, name2))
 
-        # [T2 T3] between [T1 T2]
-        corr, pval = spearmanr(list_bac2_t, list_bac1_t_1)
-        distribution_corr.append(corr)
-        # if corr < threshold or pval > 0.05:
-        #     # or pval == 0
-        #     pairs_to_remove.append((name1, name2))
-        if corr >= threshold or pval < 0.05:
-            pairs_to_return.append((name2, name1))
-        if corr >= 0.9:
-            c = 0
+            # [T2 T3] between [T1 T2]
+            corr, pval = spearmanr(list_bac2_t, list_bac1_t_1)
+            distribution_corr.append(corr)
+            # if corr < threshold or pval > 0.05:
+            #     # or pval == 0
+            #     pairs_to_remove.append((name1, name2))
+            if corr >= threshold and pval < 0.05:
+                pairs_to_return.append((name2, name1))
 
     # in order if we have (a,a) twice.
     pairs_to_return = set(pairs_to_return)
 
-    return pairs_to_return, pairs_to_remove, distribution_corr
+    return pairs_to_return, distribution_corr
+
+
+# Function to convert a dictionary to a frozenset of key-value pairs- to pair
+def dict_to_frozenset(d):
+    return frozenset(d.items())
 
 
 def graph(dict_time, processed):
@@ -257,6 +258,7 @@ def graph(dict_time, processed):
     """
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
+    # indicates if the level we are rn has a parents, for exmaple we started our algorithm with pylum level taxonomy, so it doesnt have parents, but for the level after it, pylum bacterias will be the parents for their children
     parents = None
     node_neighborhood = {}
     distribution_corr_same = []
@@ -274,49 +276,69 @@ def graph(dict_time, processed):
         # points, we will check correlation between 2 bac values along time points -->
         # as the following [T1 T2 T3] vs [T1 T2 T3]
 
-        dict_level_num = {}
-        pairs, selected_bac_same_T, distribution_corr_same = correlation_link(dict_level_num, level, dict_time, parents,
-                                                                              distribution_corr=distribution_corr_same,
-                                                                              mode='SameT')
-
+        pairs, distribution_corr_same_output = correlation_link(level, dict_time,
+                                                                distribution_corr=distribution_corr_same,
+                                                                parents=parents,
+                                                                mode='SameT')
+        distribution_corr_same.extend(distribution_corr_same_output)
+        selected_bac_same_T = []
         for u, v in pairs:
-            if u not in node_neighborhood:
-                node_neighborhood[u] = []
-            if v not in node_neighborhood:
-                node_neighborhood[v] = []
-            node_neighborhood[u].append({v: {'time': 'same', 'level': 'same'}})
-            node_neighborhood[v].append({u: {'time': 'same', 'level': 'same'}})
+            u_key = (u, "same", "same")
+            v_key = (v, "same", "same")
+            if u_key not in node_neighborhood:
+                node_neighborhood[u_key] = []
+            if v_key not in node_neighborhood:
+                node_neighborhood[v_key] = []
+            node_neighborhood[u_key].append(v_key)
+            node_neighborhood[v_key].append(u_key)
+
+            selected_bac_same_T.append(u_key)
+            selected_bac_same_T.append(v_key)
 
         # mode = 'NextT'; checking for correlations between bac at the same time points to the next time points.
         # For example, if we have 3 time points, we will check correlation between 2 bac values along time points --> as
         # the following [T1 T2] vs [T2 T3]
-        dict_level_num = {}
-        directed_pairs, selected_bac_next_T, distribution_corr_next = correlation_link(dict_level_num, level, dict_time,
-                                                                                       parents,
-                                                                                       distribution_corr=distribution_corr_next,
-                                                                                       mode='NextT',
-                                                                                       processed=processed)
+        directed_pairs, distribution_corr_next_output = correlation_link(level, dict_time,
+                                                                         distribution_corr=distribution_corr_next,
+                                                                         mode='NextT', parents=parents,
+                                                                         processed=processed)
 
+        distribution_corr_next.extend(distribution_corr_next_output)
+        selected_bac_next_T = []
+        # format {u: {'time': 'same', 'level': 'same'}}
         ###### its directed edge, u has an impact to time t+1 on v
         # because i have (u,v) (v,u)- so i  will add it once
         for u, v in directed_pairs:
-            if u not in node_neighborhood:
-                node_neighborhood[u] = []
-            if v not in node_neighborhood:
-                node_neighborhood[v] = []
-            node_neighborhood[u].append({v: {'time': 'next', 'level': 'same'}})
+            u_key = (u, "same", "same")
+            v_key = (v, "next", "same")
+            if u_key not in node_neighborhood:
+                node_neighborhood[u_key] = []
+            if v_key not in node_neighborhood:
+                node_neighborhood[v_key] = []
+            node_neighborhood[u_key].append(v_key)
+
+            selected_bac_next_T.append(u_key)
+            selected_bac_next_T.append(v_key)
 
         # taking the children from the sameT and the nextT and union them
-        children = set(selected_bac_same_T | selected_bac_next_T)
+        children = set(set(selected_bac_same_T) | set(selected_bac_next_T))
 
         # make a connection between the parents and the children
-        if parents != None:
+        if parents is not None:
             for parent in parents:
                 for child in children:
-                    if child.startswith(parent):
-                        node_neighborhood[parent].append({child: {'time': 'none', 'level': 'child'}})
-                        node_neighborhood[child].append({parent: {'time': 'none', 'level': 'parent'}})
+                    # child[0] and parent[0] indicate the bac name
+                    if child[0].startswith(parent[0]):
+                        child_key = (child[0], 'none', 'child')
+                        parent_key = (parent[0], 'none', 'parent')
+                        # if statement to check if they key is already there, because we are checking about the names
+                        # we can also have mode same and next for the same name, so we dont want duplicates keys
+                        if child_key not in node_neighborhood[parent]:
+                            node_neighborhood[parent].append(child_key)
+                        if parent_key not in node_neighborhood[child]:
+                            node_neighborhood[child].append(parent_key)
 
+        # updating the current children to be parents to the next taxonomy level
         parents = children
         print(f"{level_name} level is done")
 
@@ -684,79 +706,32 @@ def combination_node(node_neighborhood, k=4):
             # count_child_parent_connections: (int) indicates how many child-parent connections we have.
             # If we have more than 2, we will not use this combination- subgraph.
             count_child_parent_connections = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
-                j in dict_n and dict_n[j]['level'] == 'child'
+                1 for node1, node2 in combinations(node_comb, 2) for tuple_node in node_neighborhood[node1] if
+                node1[0] in tuple_node and tuple_node[2] == 'child'
             )
             if count_child_parent_connections > 2:
                 continue
+            else:
+                # for example i have 2 connection bac and for each one there is a child, so i hav 2 children, i want at least on of them to be connected to other bac.
+                # so eventually just one child can be without a "real" ( spearman connection)
+                # node2[0] is not 'child' we ha
+                num_edges = 0
+                num_edges -= count_child_parent_connections - 1
 
             # num_edges: (int) indicates how many connections we have among the nodes in such comb,
             # we want more than 4 connections in order to take it as subgraph.
-            num_edges = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if j in dict_n
-            )
+            num_edges = set((node1,node2) for node1, node2 in product(node_comb, 2) for tuple_node in node_neighborhood[node1] if
+                node2[0] in tuple_node )
+
+
 
             if num_edges >= k:
                 c += 1
-                # Save combination with features
-                combination_with_features = {}
-                for node_time_same in node_comb:
-                    features = []
-                    for conn in node_neighborhood[node_time_same]:
-                        for key, value in conn.items():
-                            if key in node_comb and (key, value['time'], value['level']) not in features:
-                                features.append((key, value['time'], value['level']))
-                    if node_time_same not in combination_with_features:
-                        combination_with_features[node_time_same] = []
-                    combination_with_features[node_time_same].append(features)
-                combi.append(combination_with_features)
+                combi.append(node_comb)
 
     print(f"Found {c} valid combinations.")
 
     return combi
-
-
-def combi(node_neighborhood, k=4):
-    """
-        Generate combinations of nodes with at least 4 connections among them.
-        Save features (time and level) for each node in the combination.
-
-        :param node_neighborhood: Dictionary of nodes and their connections
-        :param k: Number of nodes in subgraph
-        :return: List of valid node combinations with features
-        """
-    combi = []
-    nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
-    node_combinations = combinations(nodes, k)
-
-    with tqdm(total=sum(1 for _ in combinations(nodes, k))) as pbar:
-        for node_comb in node_combinations:
-            pbar.update(1)
-
-            # Count child-parent connections
-            count_child_parent_connections = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
-                any(j in d and d[j]['level'] == 'child' for d in dict_n)
-            )
-            if count_child_parent_connections > 2:
-                continue
-
-            # Count edges among the nodes
-            num_edges = sum(
-                1 for i, j in combinations(node_comb, 2) for dict_n in node_neighborhood[i] if
-                any(j in d for d in dict_n)
-            )
-            if num_edges >= 4:
-                # Save combination with features
-                combination_with_features = []
-                for node in node_comb:
-                    features = []
-                    for conn in node_neighborhood[node]:
-                        for key, value in conn.items():
-                            if key in node_comb and (key, value['time'], value['level']) not in features:
-                                features.append((key, value['time'], value['level']))
-                    combination_with_features.append((node, features))
-                combi.append(combination_with_features)
 
 
 def check_where_id(processed_list, folder):
