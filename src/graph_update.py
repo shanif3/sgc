@@ -334,9 +334,20 @@ def graph(dict_time, processed):
                         # if statement to check if they key is already there, because we are checking about the names
                         # we can also have mode same and next for the same name, so we dont want duplicates keys
                         if child_key not in node_neighborhood[parent]:
+                            # adding to the exist parent a connection with its child
                             node_neighborhood[parent].append(child_key)
+
+                        # adding new node of parent with connection to the child
+                        if parent_key not in node_neighborhood:
+                            node_neighborhood[parent_key] = []
+                            node_neighborhood[parent_key].append(child_key)
+
                         if parent_key not in node_neighborhood[child]:
                             node_neighborhood[child].append(parent_key)
+
+                        if child_key not in node_neighborhood:
+                            node_neighborhood[child_key] = []
+                            node_neighborhood[child_key].append(parent_key)
 
         # updating the current children to be parents to the next taxonomy level
         parents = children
@@ -707,25 +718,30 @@ def combination_node(node_neighborhood, k=4):
             # If we have more than 2, we will not use this combination- subgraph.
             count_child_parent_connections = sum(
                 1 for node1, node2 in combinations(node_comb, 2) for tuple_node in node_neighborhood[node1] if
-                node1[0] in tuple_node and tuple_node[2] == 'child'
+                node2[0] in tuple_node and (tuple_node[2] == 'child' or tuple_node[2] == 'parent')
             )
             if count_child_parent_connections > 2:
                 continue
-            else:
-                # for example i have 2 connection bac and for each one there is a child, so i hav 2 children, i want at least on of them to be connected to other bac.
-                # so eventually just one child can be without a "real" ( spearman connection)
-                # node2[0] is not 'child' we ha
-                num_edges = 0
-                num_edges -= count_child_parent_connections - 1
+            # else:
+            #     # for example i have 2 connection bac and for each one there is a child, so i hav 2 children, i want at least on of them to be connected to other bac.
+            #     # so eventually just one child can be without a "real" ( spearman connection)
+            #     # node2[0] is not 'child' we ha
+            #     num_edges=0
+            #     if count_child_parent_connections >0:
+            #         num_edges-= count_child_parent_connections-1
+            #     elif count_child_parent_connections == 0:
+            #         num_edges = count_child_parent_connections - 1
 
-            # num_edges: (int) indicates how many connections we have among the nodes in such comb,
-            # we want more than 4 connections in order to take it as subgraph.
-            num_edges = set((node1,node2) for node1, node2 in product(node_comb, 2) for tuple_node in node_neighborhood[node1] if
-                node2[0] in tuple_node )
+            # Check if each node in the combination is connected to at least one other node in the combination
+            all_connected = True
+            neighbors_in_comb = set()
+            for node in node_comb:
+                neighbors_in_comb.add(tuple(sorted((n, node))) for n in node_neighborhood[node] if n in node_comb)
+                if not neighbors_in_comb:
+                    all_connected = False
+                    break
 
-
-
-            if num_edges >= k:
+            if all_connected:
                 c += 1
                 combi.append(node_comb)
 
