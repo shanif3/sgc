@@ -313,43 +313,37 @@ def graph(dict_time, processed):
             v_key = (v, "next", "same")
             if u_key not in node_neighborhood:
                 node_neighborhood[u_key] = []
-            if v_key not in node_neighborhood:
-                node_neighborhood[v_key] = []
             node_neighborhood[u_key].append(v_key)
-
-            selected_bac_next_T.append(u_key)
+            # if v node( at time same) is not in neighborhood, we will add his next time node
+            if v not in node_neighborhood:
+                node_neighborhood[v_key] = []
+            # u bac represent time- same, vs v bac represent time- next
+            selected_bac_same_T.append(u_key)
             selected_bac_next_T.append(v_key)
 
         # taking the children from the sameT and the nextT and union them
-        children = set(set(selected_bac_same_T) | set(selected_bac_next_T))
 
         # make a connection between the parents and the children
         if parents is not None:
-            for parent in parents:
-                for child in children:
-                    # child[0] and parent[0] indicate the bac name
-                    if child[0].startswith(parent[0]):
-                        child_key = (child[0], 'none', 'child')
-                        parent_key = (parent[0], 'none', 'parent')
-                        # if statement to check if they key is already there, because we are checking about the names
-                        # we can also have mode same and next for the same name, so we dont want duplicates keys
-                        if child_key not in node_neighborhood[parent]:
-                            # adding to the exist parent a connection with its child
-                            node_neighborhood[parent].append(child_key)
+            for children_list, time_condition in [(selected_bac_same_T, 'same'), (selected_bac_next_T, 'next')]:
+                for parent in parents:
+                    for child in children_list:
+                        time = 'same' if time_condition is 'same' else 'next'
+                        # child[0] and parent[0] indicate the bac name
+                        if child[0].startswith(parent[0]):
+                            child_key = (child[0], time, 'child')
+                            parent_key = (parent[0], time, 'parent')
+                            # if statement to check if they key is already there, because we are checking about the names
+                            # we can also have mode same and next for the same name, so we dont want duplicates keys
+                            if child_key not in node_neighborhood[parent]:
+                                # adding to the exist parent a connection with its child
+                                node_neighborhood[parent].append(child_key)
 
-                        # adding new node of parent with connection to the child
-                        if parent_key not in node_neighborhood:
-                            node_neighborhood[parent_key] = []
-                            node_neighborhood[parent_key].append(child_key)
-
-                        if parent_key not in node_neighborhood[child]:
-                            node_neighborhood[child].append(parent_key)
-
-                        if child_key not in node_neighborhood:
-                            node_neighborhood[child_key] = []
-                            node_neighborhood[child_key].append(parent_key)
+                            if parent_key not in node_neighborhood[child]:
+                                node_neighborhood[child].append(parent_key)
 
         # updating the current children to be parents to the next taxonomy level
+        children = set(set(selected_bac_same_T) | set(selected_bac_next_T))
         parents = children
         print(f"{level_name} level is done")
 
@@ -399,79 +393,88 @@ def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
     # for each sub graph we will have its sick and healthy and not in comb samples indexes.
     dict_num_comb_index_samples = defaultdict(lambda: defaultdict(list))
 
-    for index, comb in enumerate(tqdm(combinations_graph_nodes)):
+    for index, node_comb in enumerate(tqdm(combinations_graph_nodes)):
 
-        specify_node = []
+        specify_nodes = {}
 
-        for number_node, node in enumerate(comb):
-            time = []
-            for neighborhood in node_neighborhood_dict[node]:
-                if next(iter(neighborhood)) in comb and next(iter(neighborhood)) is not node:
+        for number_node, node in enumerate(node_comb):
+            node_name = node[0]
+            if node not in specify_nodes:
+                specify_nodes[node_name] = []
+            # node[2]; time attribute of node
+            specify_nodes[node_name].append(node[2])
+            # if we have the same node at another time(same,next)
+            time_to_add = set(n[2] for n in node_neighborhood_dict[node] if
+                              n[0] is node_name)
+            if len(time_to_add) > 0:
+                specify_nodes[node_name].extend(list(time_to_add))
 
-                    time_n = list(node_neighborhood_dict[node][np.where == next(iter(neighborhood))].values())[0][
-                        'time']
-                    time.append(time_n)
-                    # len(comb)-1; should be less than the comb len by 1, because its not including the node itself.
-                    # so if the comb len is 4, i supposed to get maximum 3 items in time list
-                    # ( why maximum? --> because not everyone is connecting to everyone)
-                    if len(time) == len(comb) - 1:
-                        break
-            if 'next' in time and 'same' in time:
-                time_n = 'both'
-            if time != []:
-                specify_node.append((number_node, node, time_n))
+        for sample in over_time.index:
+            tag_index = 'healthy' if tag.loc[sample][0] == 0 else 'sick'
+            opposite_tag_index = 'not_in_healthy' if tag.loc[sample][0] == 0 else 'not_in_sick'
 
-        for sample_index in over_time.index:
-            tag_index = 'healthy' if tag.loc[sample_index][0] == 0 else 'sick'
-            tag_index1 = 'not_in_healthy' if tag.loc[sample_index][0] == 0 else 'not_in_sick'
 
+            # comb_results; (dict) where the key are letter and the value are 1/0, the bac exist at the same time point(1) or no.
             comb_results = {}
-            bits = over_time.loc[sample_index]
+            # bits; get the sample's performances along time (for example: ('A',1) ('B',1) ('C',0) where 1 indicates exists in
+            # this time letter, otherwise 0)
+            bits = over_time.loc[sample]
+            # combi_time; get just the times where the sample exists
             combi_time = "".join([times_letter[place] for place, i in enumerate(bits) if i == 1])
 
             for tuple_dict_letter in zip(times_letter, dict_time):
+                # letter; dict time letter ( A for the first dict and so on..)
+                # dict_letter_time; dict at letter time ( dict at time A (0) and so on..)
                 letter, dict_letter_time = tuple_dict_letter
                 if letter in combi_time:
+                    # time_point_index; letter time index ( 0 for A and so on..)
                     time_point_index = times_letter.index(letter)
-                    idx = np.where(np.array(processed_list[time_point_index].index) == sample_index)[0][0]
-                    # for each node in the combination i will check if it exist (bigger than 0) in the current
-                    # sample
-                    comb_results[letter] = [1 if dict_letter_time[node][idx] > 0 else 0 for node in comb]
+                    # sample_time_index; the location(index) where the sample located among the other indexes at the
+                    # same itme(for example: sample= 'H01' located second among other at the same time)
+                    sample_time_index = np.where(np.array(processed_list[time_point_index].index) == sample)[0][0]
+                    # for each node in the combination i will check if the node exist at the same time(bigger than 0)
+                    # in the current sample
+                    comb_results[letter] = [1 if dict_letter_time[node_name_in_comb[0]][sample_time_index] > 0 else 0 for
+                                            node_name_in_comb in node_comb]
 
-            # bacteria_next; contains the index of the bacteria that have correlation between the current time to the next one.
-            # tup[0] will return the index number of bacteria.
-            bacteria_next = [tup[0] for tup in specify_node if 'next' in tup]
+            # now comb_results contains for each node at each time if it exist(1), otherwise (0).
+            # for example (3 time steps and 4 nodes) comb_results= {'A':[1,1,1,0], 'B':[1,1,0,1], 'C': [0,1,1,1]}
 
             # for each time in sample i will check if the sub graph is there, if so +1 to sub graph
-            for i, time in enumerate(comb_results):
-                time = comb_results[time]
+            # Iterating over each time
+            # time_index; represents 0 for letter 'A' and so on.
+            # tune_letter; represents the comb_results keys (letters: 'A'..)
+            for time_index, time_letter in enumerate(comb_results):
+                # mult; (int) indicates if all the nodes are exists at the current time, 1 if exist otherwise 0.
                 mult = 1
-                # bacteria_next; contains the bacteria indexes that has correlation between the current time step to the next.
-                # len(bacteria_next)>0; checking if there are indexes (bacteria) that have correlation to the next time step.
-                if len(bacteria_next) > 0:
-                    # Checking if I have access to the next time step (meaning if I have next time step at the current time step)
-                    if i + 1 <= len(comb_results) - 1:
-                        # multiply the next t:
-                        # (list(comb_results.items()))[i+1] return the time_letter:values of k bacteria, at time i+1 (for example B:[1,1,,1,1] where k=4)
-                        # (list(comb_results.items()))[i+1][1] return the values
-                        # (list(comb_results.items()))[i+1][1][node_next_index] return the value at index node_next_index
-                        values_next = [(list(comb_results.items()))[i + 1][1][node_next_index] for node_next_index in
-                                       bacteria_next]
-                        # multiply the next t
-                        mult *= math.prod(values_next)
-                    # time; (list) the values of the bacteria index that are not in
-                    # bacteria_next, meaning that they have correlation at the same time step (sameT).
-                    time = [i for index, i in enumerate(time) if index not in bacteria_next]
-                mult *= math.prod(time)
+                time_letter_values = comb_results[time_letter]
+                # Iterating over node_comb
+                for node_index, node in enumerate(node_comb):
+                    node_name = node[0]
+                    # time_modes_list; (list) the times that node_name are at.
+                    time_modes_list = specify_nodes[node_name]
+                    # time_mode_list has mode same and next
+                    if 'next' in time_modes_list:
+                        # Checking if I have access to the next time step (meaning if I have next time step at the current time step)
+                        if time_index + 1 <= len(comb_results) - 1:
+                            # next_time_letter; (string) indicates the next time letter, for example we are right now at letter 'A' so hte next letter is 'B'
+                            next_time_letter = times_letter[time_index + 1]
+                            # node_value_next_time; (int) indicates if the node are exist at the next time, 1 for exists otherwise 0.
+                            node_value_next_time = comb_results[next_time_letter][node_index]
+                            mult *= node_value_next_time
+                    if 'same' in time_modes_list:
+                        node_values_same_time = time_letter_values[node_index]
+                        mult *= node_values_same_time
+
                 if mult == 1:
                     data_frame.loc[number_graph, tag_index] += 1
                     # saving to the comb dict an index of sample that has the comb, based on its tag (healthy, sick)
                     #  the index sample will appear in the dict the same amount of time that he has this comb
-                    dict_num_comb_index_samples[index][tag_index].append(sample_index)
+                    dict_num_comb_index_samples[index][tag_index].append(sample)
                 else:
-                    data_frame.loc[number_graph, tag_index1] += 1
+                    data_frame.loc[number_graph, opposite_tag_index] += 1
                     # if the index sample doesn't have the comb we will add it to 'not_in' section
-                    dict_num_comb_index_samples[index][tag_index1].append(sample_index)
+                    dict_num_comb_index_samples[index][opposite_tag_index].append(sample)
 
         number_graph += 1
 
@@ -711,8 +714,16 @@ def combination_node(node_neighborhood, k=4):
     total_combinations = math.comb(len(nodes), k)
     with tqdm(total=total_combinations) as pbar:
         for node_comb in node_combinations:
+            temp_k = k
             # Update progress bar
             pbar.update(1)
+
+            # if we have node that is of time Next, meaning it doesnt have bac at time same that a connection, we will decrease the k to be k-1 because it will be harder to find match like this because it dircted edge
+            # we decrease k by one just one time, doesnt matter how many next nodes i have, this is my threshold
+            for node in node_comb:
+                if 'next' in node:
+                    temp_k -= 1
+                    break
 
             # count_child_parent_connections: (int) indicates how many child-parent connections we have.
             # If we have more than 2, we will not use this combination- subgraph.
@@ -734,14 +745,16 @@ def combination_node(node_neighborhood, k=4):
 
             # Check if each node in the combination is connected to at least one other node in the combination
             all_connected = True
-            neighbors_in_comb = set()
+            all = set()
             for node in node_comb:
-                neighbors_in_comb.add(tuple(sorted((n, node))) for n in node_neighborhood[node] if n in node_comb)
+                # checking if i have connection with other nodes that are not me
+                neighbors_in_comb = [tuple(sorted((n[0], node[0]))) for n in node_neighborhood[node] if
+                                     n[0] in {comb[0] for comb in node_comb} and n[0] != node[0]]
                 if not neighbors_in_comb:
                     all_connected = False
                     break
-
-            if all_connected:
+                all.update(neighbors_in_comb)
+            if all_connected and len(all) >= temp_k:
                 c += 1
                 combi.append(node_comb)
 
