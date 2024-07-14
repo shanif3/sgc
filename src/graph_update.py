@@ -18,6 +18,8 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import roc_curve, roc_auc_score
 import scipy.stats as statss
 from xgboost import XGBClassifier
+import xgboost as xgb
+from sklearn.metrics import accuracy_score
 
 global taxonomy_levels
 global folder
@@ -413,7 +415,6 @@ def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
             tag_index = 'healthy' if tag.loc[sample][0] == 0 else 'sick'
             opposite_tag_index = 'not_in_healthy' if tag.loc[sample][0] == 0 else 'not_in_sick'
 
-
             # comb_results; (dict) where the key are letter and the value are 1/0, the bac exist at the same time point(1) or no.
             comb_results = {}
             # bits; get the sample's performances along time (for example: ('A',1) ('B',1) ('C',0) where 1 indicates exists in
@@ -434,7 +435,8 @@ def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
                     sample_time_index = np.where(np.array(processed_list[time_point_index].index) == sample)[0][0]
                     # for each node in the combination i will check if the node exist at the same time(bigger than 0)
                     # in the current sample
-                    comb_results[letter] = [1 if dict_letter_time[node_name_in_comb[0]][sample_time_index] > 0 else 0 for
+                    comb_results[letter] = [1 if dict_letter_time[node_name_in_comb[0]][sample_time_index] > 0 else 0
+                                            for
                                             node_name_in_comb in node_comb]
 
             # now comb_results contains for each node at each time if it exist(1), otherwise (0).
@@ -983,8 +985,8 @@ def evaluate(top_k_range):
 
     processed_train = pd.concat(processed_train)
     processed_test = pd.concat(processed_test)
-    y_train = get_tag(processed_train, tag)
-    y_test = get_tag(processed_test, tag)
+    tag_train = get_tag(processed_train, tag)
+    tag_test = get_tag(processed_test, tag)
 
     combinations_df = pd.DataFrame(filtered_combinations_graph_nodes, columns=['bac1', 'bac2', 'bac3', 'bac4'])
 
@@ -1003,82 +1005,62 @@ def evaluate(top_k_range):
     best_score = 0
     top_k_comb = [combinations_graph_train_nodes[i] for i in sorted_indices]
     for comb in top_k_comb:
-        # comb= add_taxonomy_levels_comb(comb)
-
-        X_train_comb = all_samples_dict_time_train[comb]
-        X_test_comb = all_samples_dict_time_test[comb]
-
-        # Initialize and train the XGBoost classifier
-        model = XGBClassifier()
-
-        # Evaluate the model using cross-validation
-        scores = cross_val_score(model, X_train_comb, y_train, cv=5)
-        mean_score = scores.mean()
-
-        # Update the best combination if the current one is better
-        if mean_score > best_score:
-            best_combination = comb
-            best_score = mean_score
-
-    # Print the best combination and its score
-    print(f'Best combination: {best_combination}')
-    print(f'Best cross-validation score: {best_score:.2f}')
-
-    # Validate the best combination on the test set
-    X_train_best = processed_train[list(best_combination)]
-    X_test_best = processed_test[list(best_combination)]
-    final_model = XGBClassifier()
-    final_model.fit(X_train_best, y_train)
-    test_score = final_model.score(X_test_best, y_test)
-
-    print(f'Test set accuracy with best combination: {test_score:.2f}')
-
-    # Optional: Plot feature importance for the best combination
-    from xgboost import plot_importance
-    import matplotlib.pyplot as plt
-    # get the importance of the feature-->
-
-    plot_importance(final_model)
-    plt.show()
-
-    # aucs = []
-    # for k in range(1, top_k_range + 1):
-    #     # Select top K graphs
-    #     top_k_indices = sorted_indices[:k].values
-    #     top_k_comb_name = create_comb_names(top_k_indices, filtered_combinations_graph_nodes)
-    #
-    #     # when do model we will use this to take indexes of train top k
-    #     # # Train classifier on training data using top K graphs
-    #     # train_top_k_graph_data_frame = train_data_frame.iloc[top_k_indices]
-    #     # train_top_k_graph_index_dict = [dict_num_comb_index_samples_train[key] for key in
-    #     #                                 dict_num_comb_index_samples_train if key in top_k_indices]
-    #
-    #     # Getting the test_data for the selected comb from train using top_k_comb_name i changed here to
-    #     # node_neighborhood_train because there is times that the node_neighborhood doenst have the basteria because
-    #     # it doesnt have correlation with other bacteria, so we will take the original, train dict and check if the
-    #     # tag_index relvant to this comb using doct of the train
-    #     test_data_frame, dict_num_comb_index_samples_test = checking_person(node_neighborhood_train,
-    #                                                                         top_k_comb_name,
-    #                                                                         over_time=over_time.loc[test_index],
-    #                                                                         processed_list=processed_test,
-    #                                                                         dict_time=all_samples_dict_time_test,
-    #                                                                         tag=test_tag, mode='test')
-    #     # if the comb didnt detect any sick or healthy samples, so i have no rows in the dataframe- auc is 0
-    #     if test_data_frame.shape[0] == 0:
-    #         aucs.append(0)
-    #
-    #     else:
-    #         real_tag_list_comb, predicted_tag_list_comb = convert_dict_graph_index_to_tag(
-    #             dict_num_comb_index_samples_test,
-    #             tag)
-    #
-    #
-    #         auc = roc_auc_score(real_tag_list_comb, predicted_tag_list_comb)
-    #         aucs.append(auc)
-    #
-    # plot_auc(aucs)
+        fixed_comb_list = add_taxonomy_levels_comb([(combi[0]) for combi in comb])
+        processed_train= create_column_comb(processed_train,fixed_comb_list)
 
 
+        train_data_frame = processed_train[fixed_comb_list]
+
+
+        dtrain = xgb.DMatrix(train_data_frame, label=tag_train)
+
+        # Set XGBoost parameters for binary classification
+        params = {
+            'objective': 'binary:logistic',  # for binary classification
+            'eval_metric': 'error',  # evaluation metric
+            'max_depth': 6,
+            'eta': 0.3,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+        }
+
+        # Train the XGBoost model
+        num_rounds = 100
+        model = xgb.train(params, dtrain, num_rounds)
+
+        # Make predictions for test data
+        processed_test= create_column_comb(processed_test,fixed_comb_list)
+        test_data_frame = processed_test[fixed_comb_list]
+        dtest = xgb.DMatrix(test_data_frame)
+        probabilities = model.predict(dtest)
+        predictions = (probabilities > 0.5).astype(int)  # convert probabilities to binary predictions (0 or 1)
+
+        # Evaluate the model
+        accuracy = accuracy_score(tag_test, predictions)
+        print(f"Accuracy: {accuracy}")
+
+        # Save predictions or do further analysis as needed
+        # For example, saving predictions to a CSV file
+        predictions_df = pd.DataFrame({'real_Tag': tag_test,'Prediction': predictions, 'Probability': probabilities})
+        predictions_df.to_csv(f"{folder}/predictions.csv", index=False)
+
+def create_column_comb(processed,fixed_comb_list):
+    # if the column is not in the processed (because the nodes its not a leaf- so micro2matrix created him), we will take all the sons below him and get a mean of them
+    for fixed_node in fixed_comb_list:
+
+        if fixed_node in processed.columns:
+            continue
+        else:
+            all_sons = []
+            fixed_node_trim = ";".join([part for part in fixed_node.split(';') if len(part) > 3])
+            len_node_name = len(fixed_node_trim.split(';'))
+            for col in processed.columns:
+                if col.startswith(fixed_node_trim) and len(col.split(';')) == len_node_name + 1:
+                    all_sons.append(processed[col])
+            if all_sons:  # Check if all_sons is not empty
+                all_sons_df = pd.concat(all_sons, axis=1)
+                processed[fixed_node] = all_sons_df.mean(axis=1)
+    return processed
 def create_comb_names(top_k_indices, filtered_combinations_graph_nodes):
     return [filtered_combinations_graph_nodes[idx] for idx in top_k_indices]
 
@@ -1136,7 +1118,7 @@ def get_tag(processed_train, tag):
     return y_train
 
 
-def add_taxonomy_levels_comb(comb):
+def add_taxonomy_levels_comb(comb: list):
     taxonomy = ['k__', ';p__', ';c__', ';o__', ';f__', ';g__', ';s__']
     all = []
     for node_comb in comb:
@@ -1146,7 +1128,7 @@ def add_taxonomy_levels_comb(comb):
         for index, node in enumerate(all_nodes):
             node_name += taxonomy[index] + node
             last_index = index
-        for index in range(last_index, len(taxonomy_levels)):
+        for index in range(last_index + 1, len(taxonomy_levels)):
             node_name += taxonomy[index]
         all.append(node_name)
     return all
