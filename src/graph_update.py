@@ -13,13 +13,19 @@ from matplotlib import pyplot as plt
 from scipy.stats.mstats import spearmanr
 from scipy.stats import chi2_contingency
 import statsmodels.stats.multitest as smt
+from statsmodels.formula.api import ols
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import StratifiedKFold
+from statsmodels.stats.anova import AnovaRM, anova_lm
+import MIPMLP
+from sklearn.model_selection import train_test_split, cross_val_score, KFold
 from sklearn.metrics import roc_curve, roc_auc_score
 import scipy.stats as statss
 from xgboost import XGBClassifier
 import xgboost as xgb
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_curve, auc, roc_auc_score
+import warnings
+import scipy.stats as stats
 
 global taxonomy_levels
 global folder
@@ -79,10 +85,12 @@ def create_dicts(processed):
                             all_samples_dict_time[name] = []
                         all_samples_dict_time[name].append(array_of_imgs_row_level[indices])
 
+    # with open('Diabi_train/all_samples_dict_time.pkl', 'wb') as file:
+    #     pickle.dump(all_samples_dict_time, file)
     return all_samples_no_matter_time_dict_time
 
 
-def correlation_link(level_num, list_dict_time, distribution_corr, mode='SameT',
+def correlation_link(level_num, list_dict_time, distribution_corr,threshold, mode='SameT',
                      parents=None, processed=None):
     """
 
@@ -111,12 +119,12 @@ def correlation_link(level_num, list_dict_time, distribution_corr, mode='SameT',
 
     if mode == 'SameT':
         # 0.65 and 0.7
-        pairs_to_return, distribution_corr = sameT(mutual_taxa, dict_in_level, threshold=0.6,
+        pairs_to_return, distribution_corr = sameT(mutual_taxa, dict_in_level, threshold=threshold,
                                                    distribution_corr=distribution_corr)
 
     elif mode == 'NextT':
         if processed is not None:
-            pairs_to_return, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=0.5,
+            pairs_to_return, distribution_corr = nextT(mutual_taxa, dict_in_level, processed, threshold=threshold,
                                                        distribution_corr=distribution_corr)
 
     return pairs_to_return, distribution_corr
@@ -249,7 +257,7 @@ def dict_to_frozenset(d):
     return frozenset(d.items())
 
 
-def graph(dict_time, processed):
+def graph(dict_time, processed, threshold):
     """
     Building the graph. The workflow is by starting from mode='SameT' to collect correlations between bac at the same
     time point. Then, we will check mode= 'NextT' to collect correlations between bac at the current time points to
@@ -281,7 +289,7 @@ def graph(dict_time, processed):
         pairs, distribution_corr_same_output = correlation_link(level, dict_time,
                                                                 distribution_corr=distribution_corr_same,
                                                                 parents=parents,
-                                                                mode='SameT')
+                                                                threshold=threshold,mode='SameT')
         distribution_corr_same.extend(distribution_corr_same_output)
         selected_bac_same_T = []
         for u, v in pairs:
@@ -301,7 +309,7 @@ def graph(dict_time, processed):
         # For example, if we have 3 time points, we will check correlation between 2 bac values along time points --> as
         # the following [T1 T2] vs [T2 T3]
         directed_pairs, distribution_corr_next_output = correlation_link(level, dict_time,
-                                                                         distribution_corr=distribution_corr_next,
+                                                                         distribution_corr=distribution_corr_next,threshold= threshold,
                                                                          mode='NextT', parents=parents,
                                                                          processed=processed)
 
@@ -330,7 +338,7 @@ def graph(dict_time, processed):
             for children_list, time_condition in [(selected_bac_same_T, 'same'), (selected_bac_next_T, 'next')]:
                 for parent in parents:
                     for child in children_list:
-                        time = 'same' if time_condition is 'same' else 'next'
+                        time = 'same' if time_condition == 'same' else 'next'
                         # child[0] and parent[0] indicate the bac name
                         if child[0].startswith(parent[0]):
                             child_key = (child[0], time, 'child')
@@ -364,8 +372,8 @@ def graph(dict_time, processed):
     plt.ylabel('Frequency')
     plt.savefig(f"{folder}/dist_next.png")
     plt.show()
-    # with open(f'{folder}/my_dict.pickle', 'wb') as f:
-    #     pickle.dump(node_neighborhood, f)
+    with open(f'{folder}/my_dict.pickle', 'wb') as f:
+        pickle.dump(node_neighborhood, f)
     return node_neighborhood
 
 
@@ -377,7 +385,7 @@ def fix_comb_format(line):
 
 
 def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time, processed_list, dict_time, tag,
-                    mode='train'):
+                    mode='train',shuffle=False):
     """
 
     :param over_time:
@@ -386,6 +394,8 @@ def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
     :return:
     """
 
+    if shuffle:
+        tag = tag_shuffle(over_time, tag)
     times_letter = [chr(65 + i) for i in range(len(processed_list))]  # Generates ['A', 'B', 'C', 'D', ...]
 
     locations = list(range(len(combinations_graph_nodes)))
@@ -492,13 +502,13 @@ def checking_person(node_neighborhood_dict, combinations_graph_nodes, over_time,
     # filtered_num_com_index_samples; (dict) updating the dict to the relevant comb that appear at least in one time step
     filtered_num_com_index_samples = defaultdict(dict)
     new_key = 0
-    for old_key, value in dict_num_comb_index_samples.items():
-        if old_key not in indices_to_remove:
-            filtered_num_com_index_samples[new_key] = value
-            new_key += 1
 
-    # Remove graphs that appear in no one
-    data_frame = data_frame[(data_frame['sick'] > 0) | (data_frame['healthy'] > 0)]
+    if not indices_to_remove.empty:
+        for old_key, value in dict_num_comb_index_samples.items():
+            if old_key not in indices_to_remove:
+                filtered_num_com_index_samples[new_key] = value
+                new_key += 1
+
     # because we deleted rows, now we will reset the index
     data_frame = data_frame.reset_index(drop=True)
     data_frame.to_csv(f"{folder}/health_sick_counts_per_graph.csv")
@@ -710,8 +720,6 @@ def combination_node(node_neighborhood, k=4):
     combi = []
     c = 0
     nodes = list(node_neighborhood.keys())  # Convert keys to list for Python 3 compatibility
-    # node_combinations = list(combinations(nodes, k))
-
     node_combinations = combinations(nodes, k)
     total_combinations = math.comb(len(nodes), k)
     with tqdm(total=total_combinations) as pbar:
@@ -735,15 +743,6 @@ def combination_node(node_neighborhood, k=4):
             )
             if count_child_parent_connections > 2:
                 continue
-            # else:
-            #     # for example i have 2 connection bac and for each one there is a child, so i hav 2 children, i want at least on of them to be connected to other bac.
-            #     # so eventually just one child can be without a "real" ( spearman connection)
-            #     # node2[0] is not 'child' we ha
-            #     num_edges=0
-            #     if count_child_parent_connections >0:
-            #         num_edges-= count_child_parent_connections-1
-            #     elif count_child_parent_connections == 0:
-            #         num_edges = count_child_parent_connections - 1
 
             # Check if each node in the combination is connected to at least one other node in the combination
             all_connected = True
@@ -761,7 +760,12 @@ def combination_node(node_neighborhood, k=4):
                 combi.append(node_comb)
 
     print(f"Found {c} valid combinations.")
-
+    # checking if we many sub-graph, combination as we need to continue learning on the graph
+    if c < 300:
+        return False
+    # save to pickle
+    with open(f'{folder}/combi.pickle', 'wb') as f:
+        pickle.dump(combi, f)
     return combi
 
 
@@ -791,21 +795,27 @@ def check_where_id(processed_list, folder):
     return over_time_df
 
 
-def plot(score_real, score_shuffle):
+def plot_real_vs_shuffle(score_real, score_shuffle, folder, plot_name):
     # Order the values by size
-    real_p_sorted = np.sort(score_real)[::-1]
-    shuffle_p_sorted = np.sort(score_shuffle)[::-1]
+    if plot_name=='Chi_sqaure_test':
+        real_p_sorted = np.sort(score_real)[::-1]
+        shuffle_p_sorted =np.sort(score_shuffle)[::-1]
+    else:
+        # plot the p value in -log10(p)
+        real_p_sorted = -np.log10(np.sort(score_real)[::-1])
+        shuffle_p_sorted = -np.log10(np.sort(score_shuffle)[::-1])
 
     # Plot the data
     plt.figure(figsize=(10, 6))
     plt.plot(real_p_sorted, label='Real Data', marker='x')
     plt.plot(shuffle_p_sorted, label='Shuffle Data', marker='x')
     plt.xlabel('Ordered Index')
-    plt.ylabel('Score')
-    plt.title('Score of Real and Shuffle Data')
+    plt.ylabel('-log10(p_val)')
+    plt.title(f'Score of Real and Shuffle Data- {plot_name}')
     plt.legend()
     plt.grid(True)
-    plt.savefig("Score_real_vs_shuffle.png")
+
+    plt.savefig(f"{folder}/{plot_name}_Score_real_vs_shuffle.png")
 
 
 def tag_shuffle(over_time, tag):
@@ -841,6 +851,10 @@ def calculate_chi_square_score(data_frame):
 
     scores = ((x - x_e) ** 2 / x_e) + ((y - y_e) ** 2 / y_e) + ((w - w_e) ** 2 / w_e) + ((z - z_e) ** 2 / z_e)
 
+    # Calculate the p-value for the chi-square statistic
+    degrees_of_freedom = 1  # For a 2x2 contingency table, degrees of freedom is typically 1
+    p_values = 1 - stats.chi2.cdf(scores, degrees_of_freedom)
+
     # Create a DataFrame to store graph numbers and scores
     score_df = pd.DataFrame({
         'graph_number': data_frame.index,
@@ -848,7 +862,8 @@ def calculate_chi_square_score(data_frame):
         'healthy': data_frame['healthy'],
         'not_in_sick': data_frame['not_in_sick'],
         'not_in_healthy': data_frame['not_in_healthy'],
-        'score': scores
+        'score': scores,
+        'p_value': p_values
     })
 
     return score_df
@@ -870,7 +885,7 @@ def main():
     timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
     timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
     timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
-    tag = pd.read_csv(f"Data/tag.csv", index_col=0)
+    tag = pd.read_csv(f"GDM/tag.csv", index_col=0)
 
     # Fixing format
     timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
@@ -918,62 +933,180 @@ def run(timeA, timeB, timeC, taxonomy_levels_param, folder_param, tag, threshold
     print("finished at :", current_time)
 
 
-def evaluate(top_k_range):
+def evaluate(k):
     global folder
     global taxonomy_levels
     taxonomy_levels = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
     global shuffle
     shuffle = False
-    folder = '/home/shanif3/Dyamic_data/GDM-original/src/Diabi_train'
-    timeA = pd.read_csv(f"Data/T[A].csv", index_col=0)
-    timeB = pd.read_csv(f"Data/T[B].csv", index_col=0)
-    timeC = pd.read_csv(f"Data/T[C].csv", index_col=0)
-    tag = pd.read_csv(f"Data/tag.csv", index_col=0)
+    warnings.filterwarnings("ignore")
+    folder = '/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109'
+    tag = pd.read_csv(f"{folder}/tag.csv", index_col=0)
+    # tag = tag[['Patient_ID', 'caesar']]
+    # tag.columns = ['ID', 'Tag']
+
+    tag= tag[['Patient_ID','mother_health_status']]
+    tag.columns= ['ID','Tag']
+    tag['Tag']=tag['Tag'].map({'Ob': 1, 'Nw': 0})
+    # Reset the index to remove the RUN column
+    tag.reset_index(drop=True, inplace=True)
+
+    # Set the ID column as the new index
+    tag.set_index('ID', inplace=True)
+    # Keep only the first occurrence of each index
+    tag= tag.groupby(tag.index).first()
+    folder_no_norm = 'no_normalization'
+    folder_with_norm = 'with_normalization'
+
+
+    # GDM
+    # data no normalization
+    # folder_no_norm = 'no_normalization'
+    # T1_no_norm = pd.read_csv(f"{folder_no_norm}/T1.csv", index_col=0)
+    # T2_no_norm = pd.read_csv(f"{folder_no_norm}/T2.csv", index_col=0)
+    # T3_no_norm = pd.read_csv(f"{folder_no_norm}/T3.csv", index_col=0)
+    #
+    # # data with normalization
+    # folder_with_norm = "with_normalization"
+    # T1_with_norm = pd.read_csv(f"{folder_with_norm}/T1.csv", index_col=0)
+    # T2_with_norm = pd.read_csv(f"{folder_with_norm}/T2.csv", index_col=0)
+    # T3_with_norm = pd.read_csv(f"{folder_with_norm}/T3.csv", index_col=0)
 
     # Fixing format
-    timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
-    timeB = timeB.rename(columns={col: col.split('.')[0] for col in timeB.columns})
-    timeC = timeC.rename(columns={col: col.split('.')[0] for col in timeC.columns})
+    # timeA = timeA.rename(columns={col: col.split('.')[0] for col in timeA.columns})
+    # timeB = timeB.rename(columns={col: col.split('.')[0] for col in timeB.columns})
+    # timeC = timeC.rename(columns={col: col.split('.')[0] for col in timeC.columns})
 
-    # timeA = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_1.csv", index_col=0)
-    # timeB = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_2.csv", index_col=0)
-    # timeC = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_3.csv", index_col=0)
-    # timeD = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_4.csv", index_col=0)
-    # timeE = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_5.csv", index_col=0)
-    # timeF = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_6.csv", index_col=0)
-    # timeG = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_7.csv", index_col=0)
-    # timeH = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_8.csv", index_col=0)
-    # timeI = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_9.csv", index_col=0)
-    # timeJ = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_10.csv", index_col=0)
-    # timeK = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/diabimmune_check/collection_month_11.csv", index_col=0)
-    # tag = pd.read_csv("/home/shanif3/Codes/MIPMLP/data_to_compare/dynami/diabimmune/tag_filter.csv", index_col=0)
+    # probiotic ceasar 144
+    # three_month_no_norm = pd.read_csv(f"{folder}/{folder_no_norm}/3_months.csv", index_col=0)
+    # twelve_month_no_norm = pd.read_csv(f"{folder}/{folder_no_norm}/12_months.csv", index_col=0)
+    # twenty_four_month_no_norm = pd.read_csv(f"{folder}/{folder_no_norm}/24_months.csv", index_col=0)
+    # at_birth_no_norm = pd.read_csv(f"{folder}/{folder_no_norm}/At_Birth.csv", index_col=0)
+    #
+    # three_month_with_norm = pd.read_csv(f"{folder}/{folder_with_norm}/3_months.csv", index_col=0)
+    # twelve_month_with_nrom = pd.read_csv(f"{folder}/{folder_with_norm}/12_months.csv", index_col=0)
+    # twenty_four_month_with_norm = pd.read_csv(f"{folder}/{folder_with_norm}/24_months.csv", index_col=0)
+    # at_birth_with_norm = pd.read_csv(f"{folder}/{folder_with_norm}/At_Birth.csv", index_col=0)
 
-    processed = timeA, timeB, timeC
-    # processed = timeA, timeB, timeC, timeD, timeE, timeF, timeG, timeH, timeI, timeJ, timeK
+    # processed = three_month_no_norm, twelve_month_no_norm, twenty_four_month_no_norm, at_birth_no_norm
+    # processed_mipmlp = three_month_with_norm, twelve_month_with_nrom, twenty_four_month_with_norm, at_birth_with_norm
 
-    over_time = check_where_id(processed, folder)
+    # #fat 109
+    A_no_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/no_normalization/A.csv", index_col=0)
+    B_no_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/no_normalization/B.csv", index_col=0)
+    C_no_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/no_normalization/C.csv", index_col=0)
+    D_no_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/no_normalization/D.csv", index_col=0)
+    E_no_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/no_normalization/E.csv", index_col=0)
 
-    train_index, test_index = train_test_split(over_time.index, test_size=0.2)
-    train_tag = tag.loc[train_index]
-    test_tag = tag.loc[test_index]
+    A_with_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/with_normalization/A.csv", index_col=0)
+    B_with_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/with_normalization/B.csv", index_col=0)
+    C_with_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/with_normalization/C.csv", index_col=0)
+    D_with_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/with_normalization/D.csv", index_col=0)
+    E_with_norm= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/with_normalization/E.csv", index_col=0)
 
-    processed_train = []
-    processed_test = []
-    for index, proc_time in enumerate(processed):
-        available_index_train = train_index.intersection(proc_time.index)
-        available_index_test = test_index.intersection(proc_time.index)
+    processed= A_no_norm,B_no_norm, C_no_norm, D_no_norm,E_no_norm
+    processed_mipmlp= A_with_norm,B_with_norm,C_with_norm,D_with_norm,E_with_norm
 
-        # groupby- in order to drop duplicates
-        processed_train.append(proc_time.loc[available_index_train].groupby(level=0).first())
-        processed_test.append(proc_time.loc[available_index_test].groupby(level=0).first())
 
-    all_samples_dict_time_train = create_dicts(processed_train)
-    all_samples_dict_time_test = create_dicts(processed_test)
 
-    node_neighborhood_train = graph(all_samples_dict_time_train, processed_train)
-    # node_neighborhood_test = graph(samples_all_time_dict_time_test)
 
-    combinations_graph_train_nodes = combination_node(node_neighborhood_train, k=4)
+
+    checkpoint_flag=True
+    if not checkpoint_flag:
+        over_time = check_where_id(processed, folder)
+
+        train_index, test_index = train_test_split(over_time.index, test_size=0.2)
+        train_tag = tag.loc[train_index]
+        test_tag = tag.loc[test_index]
+
+        processed_train = []
+        processed_test = []
+        for index, proc_time in enumerate(processed):
+            available_index_train = train_index.intersection(proc_time.index)
+            available_index_test = test_index.intersection(proc_time.index)
+
+            # groupby- in order to drop duplicates
+            processed_train.append(proc_time.loc[available_index_train].groupby(level=0).first())
+            processed_test.append(proc_time.loc[available_index_test].groupby(level=0).first())
+
+        processed_train_aftermipmlp = []
+        for proc_time_mip in processed_mipmlp:
+            available_index_train = train_index.intersection(proc_time_mip.index)
+            processed_train_aftermipmlp.append(proc_time_mip.loc[available_index_train].groupby(level=0).first())
+
+        all_samples_dict_time_train = create_dicts(processed_train)
+        all_samples_dict_time_train_Aftermipmlp = create_dicts(processed_train_aftermipmlp)
+        all_samples_dict_time_test = create_dicts(processed_test)
+
+        threshold=0.6
+        while True:
+            node_neighborhood_train = graph(all_samples_dict_time_train, processed_train,threshold)
+            # node_neighborhood_test = graph(samples_all_time_dict_time_test, processed_test, threshol)
+
+            combinations_graph_train_nodes = combination_node(node_neighborhood_train, k=k)
+            # if we dont have enough sub graph- we will decrease the threshold value for correlation edge in 20 percent
+            if combinations_graph_train_nodes == False:
+                threshold -= threshold*0.2
+            else:
+                break
+
+        checkpoint = {
+            'train_index': train_index,
+            'test_index': test_index,
+            'train_tag': train_tag,
+            'test_tag': test_tag,
+            'processed_train': processed_train,
+            'processed_test': processed_test,
+            'processed_train_aftermipmlp': processed_train_aftermipmlp,
+            'all_samples_dict_time_train' : all_samples_dict_time_train,
+            'all_samples_dict_time_train_Aftermipmlp':all_samples_dict_time_train_Aftermipmlp,
+            'node_neighborhood_train': node_neighborhood_train,
+            'combinations_graph_train_nodes': combinations_graph_train_nodes,
+            'over_time': over_time
+        }
+
+        # Save the checkpoint using pickle
+        with open(f'{folder}/checkpoint.pkl', 'wb') as f:
+            pickle.dump(checkpoint, f)
+
+    if checkpoint_flag:
+        with open(f'{folder}/checkpoint.pkl', 'rb') as f:
+            checkpoint = pickle.load(f)
+
+        print("Loading checkpoint")
+        # Access the saved variables
+        train_index = checkpoint['train_index']
+        test_index = checkpoint['test_index']
+        train_tag = checkpoint['train_tag']
+        test_tag = checkpoint['test_tag']
+        processed_train = checkpoint['processed_train']
+        processed_test = checkpoint['processed_test']
+        processed_train_aftermipmlp = checkpoint['processed_train_aftermipmlp']
+
+        all_samples_dict_time_train = checkpoint['all_samples_dict_time_train']
+        all_samples_dict_time_train_Aftermipmlp =checkpoint['all_samples_dict_time_train_Aftermipmlp']
+        node_neighborhood_train= checkpoint['node_neighborhood_train']
+        combinations_graph_train_nodes=checkpoint['combinations_graph_train_nodes']
+        over_time =checkpoint['over_time']
+
+    p_val_interaction_list_no_shuffle, p_val_tag_list_no_shuffle = preprocess_anova(combinations_graph_train_nodes,
+                                                                                    train_tag,
+                                                                                    node_neighborhood_train,
+                                                                                    over_time.loc[train_index],
+                                                                                    processed_train_aftermipmlp,
+                                                                                    all_samples_dict_time_train_Aftermipmlp,
+                                                                                    shuffle=False)
+
+    p_val_interaction_list_shuffle, p_val_tag_list_shuffle = preprocess_anova(combinations_graph_train_nodes,
+                                                                              train_tag,
+                                                                              node_neighborhood_train,
+                                                                              over_time.loc[train_index],
+                                                                              processed_train_aftermipmlp,
+                                                                              all_samples_dict_time_train_Aftermipmlp,
+                                                                              shuffle=True)
+    plot_real_vs_shuffle(p_val_interaction_list_no_shuffle, p_val_interaction_list_shuffle, folder,
+                         plot_name="interaction_tag_bac_ANOVA")
+    plot_real_vs_shuffle(p_val_tag_list_no_shuffle, p_val_tag_list_shuffle, folder, plot_name='tag_ANOVA')
 
     # Get training data
     train_data_frame, dict_num_comb_index_samples_train, filtered_combinations_graph_nodes = checking_person(
@@ -983,84 +1116,440 @@ def evaluate(top_k_range):
         all_samples_dict_time_train,
         train_tag)
 
+    train_data_frame_shuffle, _, _ = checking_person(
+        node_neighborhood_train,
+        combinations_graph_train_nodes,
+        over_time.loc[train_index], processed_train,
+        all_samples_dict_time_train,
+        train_tag, shuffle=True)
+
+    all_samples_dict_time_test = create_dicts(processed_test)
+    test_data_frame,_,_= checking_person(
+        node_neighborhood_train,
+        combinations_graph_train_nodes,
+        over_time.loc[test_index],
+        processed_test,
+        all_samples_dict_time_test,
+        test_tag)
+    #
     processed_train = pd.concat(processed_train)
     processed_test = pd.concat(processed_test)
     tag_train = get_tag(processed_train, tag)
     tag_test = get_tag(processed_test, tag)
 
-    combinations_df = pd.DataFrame(filtered_combinations_graph_nodes, columns=['bac1', 'bac2', 'bac3', 'bac4'])
+    combinations_df = pd.DataFrame(filtered_combinations_graph_nodes, columns=['bac1', 'bac2', 'bac3'])
 
     train_data_frame.to_csv(f"{folder}/train_data.csv")
-    # Calculate chi-square scores for training data
-    scores = calculate_chi_square_score(train_data_frame)
-    # Ensure the sizes match
-    # assert len(combinations_df) == len(train_data_frame), "Sizes do not match!"
-
+    test_data_frame.to_csv(f"{folder}/test_data.csv")
+    # Calculate chi-square scores_train for training data
+    scores_train = calculate_chi_square_score(train_data_frame)
+    scores_train_shuffle= calculate_chi_square_score(train_data_frame_shuffle)
+    scores_test= calculate_chi_square_score(test_data_frame)
+    scores_test.to_csv(f"{folder}/scores_test.csv")
+    plot_real_vs_shuffle(scores_train['score'], scores_train_shuffle['score'], folder, plot_name="Chi_square_test")
+    plot_chi_square_train_vs_test(scores_train, scores_test)
     # merge to each graph its combination
-    scores = pd.concat([scores, combinations_df], axis=1)
+    scores_train = pd.concat([scores_train, combinations_df], axis=1)
 
-    scores.to_csv(f"{folder}/scores.csv")
-    # Sort graphs by their scores in descending order and get top 10 most significant combinations
-    sorted_indices = np.argsort(scores['score'])[::-1][:10]
-    best_score = 0
+    scores_train.to_csv(f"{folder}/scores_train.csv")
+
+    # Sort graphs by their scores_train in descending order and get top 10 most significant combinations
+    sorted_indices = np.argsort(scores_train['score'])[::-1]
+    best_auc = 0
     top_k_comb = [combinations_graph_train_nodes[i] for i in sorted_indices]
-    for comb in top_k_comb:
+    kf = StratifiedKFold(n_splits=10, shuffle=True)
+
+    for index, comb in enumerate(top_k_comb):
         fixed_comb_list = add_taxonomy_levels_comb([(combi[0]) for combi in comb])
-        processed_train= create_column_comb(processed_train,fixed_comb_list)
+        processed_train_adding_comb_col = create_column_comb(processed_train, fixed_comb_list)
+
+        train_data_frame = processed_train_adding_comb_col[fixed_comb_list]
+        fold_scores = []
+        fold_probabilities = []
+        fold_true_labels = []
+        for fold_number, idx_split in enumerate(kf.split(train_data_frame, tag_train)):
+            train_idx, val_idx = idx_split
+            X_train, X_val = train_data_frame.iloc[train_idx], train_data_frame.iloc[val_idx]
+            y_train, y_val = tag_train.iloc[train_idx], tag_train.iloc[val_idx]
+
+            X_train.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in X_train.columns]
+            X_val.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in X_val]
+
+            model = XGBClassifier(
+                objective='binary:logistic',
+                eval_metric='error',
+                max_depth=6,
+                eta=0.3,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                use_label_encoder=False
+            )
+
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], early_stopping_rounds=10, verbose=False)
+            val_probabilities = model.predict_proba(X_val)[:, 1]
+            val_predictions = (val_probabilities > 0.5).astype(int)
+            fold_probabilities.extend(val_probabilities)
+            fold_true_labels.extend(list(y_val['Tag']))
+
+            fold_score = accuracy_score(y_val, val_predictions)
+            print(f"Fold number {fold_number}: {fold_score}")
+            fold_scores.append(fold_score)
+
+        mean_fold_score = np.mean(fold_scores)
+        print(f"Mean Accuracy for combination {comb}: {mean_fold_score}")
+
+        if index<10:
+            plot_roc(folder,fold_true_labels,fold_probabilities,name=index)
+        fpr, tpr, _ = roc_curve(fold_true_labels, fold_probabilities)
+        roc_auc = auc(fpr, tpr)
+        if roc_auc > best_auc:
+            best_auc = roc_auc
+            best_comb = comb
+            best_fold_true_labels= fold_true_labels
+            best_fold_probabilities= fold_probabilities
+
+    plot_roc(folder,best_fold_true_labels, best_fold_probabilities, name= f'best comb in index {index}')
+
+    # Train final model on the full training data with the best combination
+    fixed_comb_list = add_taxonomy_levels_comb([(combi[0]) for combi in best_comb])
+    processed_train = create_column_comb(processed_train, fixed_comb_list)
+    train_data_frame = processed_train[fixed_comb_list]
+    train_data_frame.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in
+                                train_data_frame.columns]
+
+    model_final = XGBClassifier(
+        objective='binary:logistic',
+        eval_metric='error',
+        max_depth=6,
+        eta=0.3,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        use_label_encoder=False
+    )
+    model_final.fit(train_data_frame, tag_train)
+
+    # Make predictions for test data
+    processed_test_final = create_column_comb(processed_test.copy(), fixed_comb_list)
+    test_data_frame_final = processed_test_final[fixed_comb_list]
+
+    test_data_frame_final.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in
+                                     test_data_frame_final.columns]
+
+    probabilities_final = model_final.predict_proba(test_data_frame_final)[:,
+                          1]  # Get probabilities for the positive class
+    predictions_final = (probabilities_final > 0.5).astype(int)
+
+    # Evaluate the final model
+    accuracy_final = accuracy_score(tag_test, predictions_final)
+    print(f"Final Accuracy: {accuracy_final}")
+
+    # Save predictions to a CSV file
+    predictions_df = pd.DataFrame(
+        {'index': tag_test.index,
+         'real_Tag': tag_test['Tag'],
+         'Prediction': predictions_final,
+         'Probability': probabilities_final})
+    predictions_df.to_csv(f"{folder}/predictions.csv", index=False)
+
+    # Plot ROC curve for the final model
+    plot_roc(folder,  list(tag_test['Tag']),probabilities_final, "final_model")
 
 
-        train_data_frame = processed_train[fixed_comb_list]
+# learning each time every 5 batches
+# fold_scores = []
+# fold_probabilities = []
+# fold_true_labels = []
+# for i in range(5, len(top_k_comb) + 1, 5):
+#     comb_batch = top_k_comb[:i]
+#     combined_fixed_comb_list = []
+#
+#     for comb in comb_batch:
+#         fixed_comb_list = add_taxonomy_levels_comb([(combi[0]) for combi in comb])
+#         combined_fixed_comb_list.extend(fixed_comb_list)
+#
+#     combined_fixed_comb_list = list(set(combined_fixed_comb_list))
+#     processed_train_adding_comb_col = create_column_comb(processed_train, combined_fixed_comb_list)
+#     train_data_frame = processed_train_adding_comb_col[combined_fixed_comb_list]
+#
+#     for fold_number, (train_idx, val_idx) in enumerate(kf.split(train_data_frame, tag_train)):
+#         X_train, X_val = train_data_frame.iloc[train_idx], train_data_frame.iloc[val_idx]
+#         y_train, y_val = tag_train.iloc[train_idx], tag_train.iloc[val_idx]
+#
+#         X_train.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in X_train.columns]
+#         X_val.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in X_val]
+#
+#         model = XGBClassifier(
+#             objective='binary:logistic',
+#             eval_metric='error',
+#             max_depth=6,
+#             eta=0.3,
+#             subsample=0.8,
+#             colsample_bytree=0.8,
+#             use_label_encoder=False
+#         )
+#
+#         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], early_stopping_rounds=10, verbose=False)
+#         val_probabilities = model.predict_proba(X_val)[:, 1]
+#         val_predictions = (val_probabilities > 0.5).astype(int)
+#         fold_probabilities.extend(val_probabilities)
+#         fold_true_labels.extend(list(y_val['Tag']))
+#
+#         fold_score = accuracy_score(y_val, val_predictions)
+#         print(f"Fold number {fold_number}: {fold_score}")
+#         fold_scores.append(fold_score)
+#
+#     # mean_fold_score = np.mean(fold_scores)
+#     # print(f"Mean Accuracy for combination batch {i}: {mean_fold_score}")
+#
+# plot_roc(folder, fold_probabilities, fold_true_labels, f"train_roc_curve")
+#
+# # Make predictions for test data
+# processed_test_final = create_column_comb(processed_test, combined_fixed_comb_list)
+# test_data_frame_final = processed_test_final[combined_fixed_comb_list]
+# test_data_frame_final.columns = [col.replace('[', '').replace(']', '').replace('<', '') for col in
+#                                  test_data_frame_final.columns]
+#
+# probabilities_final = model.predict_proba(test_data_frame_final)[:, 1]
+# predictions_final = (probabilities_final > 0.5).astype(int)
+#
+# # Evaluate the final model
+# accuracy_final = accuracy_score(tag_test, predictions_final)
+# print(f"Final Accuracy for combination batch {i}: {accuracy_final}")
+#
+# # Plot ROC for test data
+# plot_roc(folder, probabilities_final, tag_test, f"test_comb_batch_{i}")
+#
+
+def plot_chi_square_train_vs_test(scores_train, scores_test):
+    # Compute the sum of 'health' and 'sick' for each row in the training set
+
+    # Calculate fraction_chi_square for train dataset
+    scores_train['fraction_chi_square'] = 0
+    scores_train.loc[scores_train['healthy'] > scores_train['sick'], 'fraction_chi_square'] = scores_train['score']
+    scores_train.loc[scores_train['healthy'] < scores_train['sick'], 'fraction_chi_square'] = -scores_train['score']
+
+    # Calculate fraction_chi_square for test dataset
+    scores_test['fraction_chi_square'] = 0
+    scores_test.loc[scores_test['healthy'] > scores_test['sick'], 'fraction_chi_square'] = scores_test['score']
+    scores_test.loc[scores_test['healthy'] < scores_test['sick'], 'fraction_chi_square'] = -scores_test['score']
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.scatter(scores_train['fraction_chi_square'], scores_test['fraction_chi_square'], alpha=0.5)
+    plt.xlabel('Train Fraction Chi-Square')
+    plt.ylabel('Test Fraction Chi-Square')
+    plt.title("Chi-Square: Train vs Test", fontsize=15, fontweight="bold")
+    plt.grid(True)
+    plt.savefig("scatter_chi_square_train_vs_test.png")
 
 
-        dtrain = xgb.DMatrix(train_data_frame, label=tag_train)
+    plt.close()
 
-        # Set XGBoost parameters for binary classification
-        params = {
-            'objective': 'binary:logistic',  # for binary classification
-            'eval_metric': 'error',  # evaluation metric
-            'max_depth': 6,
-            'eta': 0.3,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-        }
 
-        # Train the XGBoost model
-        num_rounds = 100
-        model = xgb.train(params, dtrain, num_rounds)
+def plot_combined_histogram(df,mode):
 
-        # Make predictions for test data
-        processed_test= create_column_comb(processed_test,fixed_comb_list)
-        test_data_frame = processed_test[fixed_comb_list]
-        dtest = xgb.DMatrix(test_data_frame)
-        probabilities = model.predict(dtest)
-        predictions = (probabilities > 0.5).astype(int)  # convert probabilities to binary predictions (0 or 1)
+    df['sum_health_sick'] = df['healthy'] + df['sick']
+    df_sorted = df.sort_values(by='sum_health_sick')
 
-        # Evaluate the model
-        accuracy = accuracy_score(tag_test, predictions)
-        print(f"Accuracy: {accuracy}")
+    # Plot the sorted sum_health_sick values
+    plt.figure(figsize=(10, 6))
+    plt.plot(df_sorted['sum_health_sick'].values, marker='o', linestyle='-', color='b')
+    plt.xlabel('Ordered Rows (by Sum)')
+    plt.ylabel('Sum of Healthy and Sick')
+    plt.title(f'{mode}')
+    plt.grid(True)
 
-        # Save predictions or do further analysis as needed
-        # For example, saving predictions to a CSV file
-        predictions_df = pd.DataFrame({'real_Tag': tag_test,'Prediction': predictions, 'Probability': probabilities})
-        predictions_df.to_csv(f"{folder}/predictions.csv", index=False)
+    plt.savefig(f"count_people_{mode}.png")
 
-def create_column_comb(processed,fixed_comb_list):
+def plot_roc(folder,  true_labels,pred_probabilities,name):
+    fpr, tpr, _ = roc_curve(true_labels, pred_probabilities)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(f"{name}", fontsize=15, fontweight="bold")
+    plt.legend(loc='lower right')
+    plt.savefig(f'{folder}/roc_curve_{name}.png')
+    plt.close()
+
+
+def create_column_comb(processed, fixed_comb_list):
     # if the column is not in the processed (because the nodes its not a leaf- so micro2matrix created him), we will take all the sons below him and get a mean of them
     for fixed_node in fixed_comb_list:
-
         if fixed_node in processed.columns:
             continue
         else:
-            all_sons = []
             fixed_node_trim = ";".join([part for part in fixed_node.split(';') if len(part) > 3])
             len_node_name = len(fixed_node_trim.split(';'))
-            for col in processed.columns:
-                if col.startswith(fixed_node_trim) and len(col.split(';')) == len_node_name + 1:
-                    all_sons.append(processed[col])
-            if all_sons:  # Check if all_sons is not empty
-                all_sons_df = pd.concat(all_sons, axis=1)
-                processed[fixed_node] = all_sons_df.mean(axis=1)
+            all_sons = []
+            while not all_sons:
+                all_sons = []
+                for col in processed.columns:
+                    len_col = len(([part for part in col.split(';') if len(part) > 3]))
+                    if col.startswith(fixed_node_trim) and len_col == len_node_name + 1:
+                        all_sons.append(processed[col])
+
+                if all_sons:  # Found sons, calculate mean
+                    all_sons_df = pd.concat(all_sons, axis=1)
+                    processed[fixed_node] = all_sons_df.mean(axis=1)
+                    break
+                else:  # No sons found, derive from lower level
+                    dict_all = {}
+                    for col in processed.columns:
+                        if col.startswith(fixed_node_trim):
+                            len_bac = len([part for part in col.split(';') if len(part) > 3])
+                            if len_bac not in dict_all:
+                                dict_all[len_bac] = []
+                            dict_all[len_bac].append(col)
+
+                    sorted_dict = dict(sorted(dict_all.items()))
+                    sorted_keys = list(sorted_dict.keys())
+
+                    if sorted_keys:  # Check if there are keys in sorted_dict
+                        first_key_cols = sorted_dict[sorted_keys[0]]
+                        for col in first_key_cols:
+                            all_sons.append(processed[col])
+
+                        col_name = first_key_cols[0]
+                        col_name = col_name.split(';')
+                        len_col_name = len([part for part in col_name if len(part) > 3])
+                        list_a = []
+                        col_name_father = ";".join(col_name[:len_col_name - 1])
+                        list_a.append(col_name_father)
+                        col_name_father = add_taxonomy_levels_comb(list_a, mode='thereare')
+                        col_name_father = col_name_father[0]
+                        if all_sons:  # Check if all_sons is not empty
+                            all_sons_df = pd.concat(all_sons, axis=1)
+                            processed[col_name_father] = all_sons_df.mean(axis=1)
+                            all_sons = []
+
     return processed
+
+
+def preprocess_anova(combinations_graph_nodes, tag, node_neighborhood_dict, over_time, processed_list, dict_time,
+                     shuffle=False):
+    if shuffle:
+        tag = tag_shuffle(over_time, tag)
+    p_val_interaction_list = []
+    p_val_tag_list = []
+    times_letter = [chr(65 + i) for i in range(len(processed_list))]  # Generates ['A', 'B', 'C', 'D', ...]
+    p_val = 0.05
+    for index, node_comb in enumerate(tqdm(combinations_graph_nodes)):
+
+        specify_nodes = {}
+
+        for number_node, node in enumerate(node_comb):
+            node_name = node[0]
+            if node not in specify_nodes:
+                specify_nodes[node_name] = []
+            # node[2]; time attribute of node
+            specify_nodes[node_name].append(node[2])
+            # if we have the same node at another time(same,next)
+            time_to_add = set(n[2] for n in node_neighborhood_dict[node] if
+                              n[0] is node_name)
+            if len(time_to_add) > 0:
+                specify_nodes[node_name].extend(list(time_to_add))
+
+        columns_bac_time = []
+        for node_name in specify_nodes:
+            # has only same and nextT
+            if len(specify_nodes[node_name]) == 2:
+                for time in specify_nodes[node_name]:
+                    name_column = f"{node_name}_{time}"
+                    columns_bac_time.append(name_column)
+            if len(specify_nodes[node_name]) == 1:
+                name_column = f"{node_name}_{specify_nodes[node_name][0]}"
+                columns_bac_time.append(name_column)
+
+        columns_bac_time.append('Tag')
+        data_frame = pd.DataFrame(columns=columns_bac_time)
+
+        for sample_index, sample in enumerate(over_time.index):
+
+            tag_index = 'healthy' if tag.loc[sample][0] == 0 else 'sick'
+
+            # comb_results; (dict) where the key are letter and the value are 1/0, the bac exist at the same time point(1) or no.
+            comb_results = {}
+            # bits; get the sample's performances along time (for example: ('A',1) ('B',1) ('C',0) where 1 indicates exists in
+            # this time letter, otherwise 0)
+            bits = over_time.loc[sample]
+            # combi_time; get just the times where the sample exists
+            combi_time = "".join([times_letter[place] for place, i in enumerate(bits) if i == 1])
+
+            for tuple_dict_letter in zip(times_letter, dict_time):
+                # letter; dict time letter ( A for the first dict and so on..)
+                # dict_letter_time; dict at letter time ( dict at time A (0) and so on..)
+                letter, dict_letter_time = tuple_dict_letter
+                if letter in combi_time:
+                    # time_point_index; letter time index ( 0 for A and so on..)
+                    time_point_index = times_letter.index(letter)
+                    # sample_time_index; the location(index) where the sample located among the other indexes at the
+                    # same itme(for example: sample= 'H01' located second among other at the same time)
+                    sample_time_index = np.where(np.array(processed_list[time_point_index].index) == sample)[0][0]
+                    # for each node in the combination i will check if the node exist at the same time(bigger than 0)
+                    # in the current sample
+                    comb_results[letter] = [dict_letter_time[node_name_in_comb[0]][sample_time_index]
+                                            for node_name_in_comb in node_comb]
+            # row of sample, with the columns 'columns_bac_time', i will take from comb_results the values based on the columns time.
+            # comb results eventually will contains matrix of number of time on k (number of bac) dim. si if i have a column that is next i will take the value for the next row in line as values.
+
+            nodes_names_comb = [node[0] for node in node_comb]
+            rows = []
+            for time_index, letter in enumerate(comb_results):
+                row = []
+                for col in columns_bac_time:
+                    if col == 'Tag':
+                        row.append(tag_index)
+
+                    else:
+
+                        col_name_without_time, time_node = col.rsplit('_',1)
+                        index_between_other_nodes_comb_list = nodes_names_comb.index(col_name_without_time)
+                        if time_node == 'next':
+                            if time_index + 1 <= len(comb_results) - 1:
+                                next_time_letter = times_letter[time_index + 1]
+                                value_time = comb_results[next_time_letter][index_between_other_nodes_comb_list]
+                                row.append(value_time)
+                            else:
+                                # we have node of next, but we dont have a row after us to take the value of the bac.
+                                break
+                        if time_node == 'same':
+                            value_time = comb_results[letter][index_between_other_nodes_comb_list]
+                            row.append(value_time)
+
+                rows.append(row)
+            data_frame = pd.concat([data_frame, pd.DataFrame(rows, columns=columns_bac_time)], ignore_index=True)
+
+        p_value_interaction_tag_bac, p_value_tag = anova_repeated_measures(data_frame)
+        p_val_interaction_list.append(p_value_interaction_tag_bac)
+        p_val_tag_list.append(p_value_tag)
+        # if p_value_interaction_tag_bac < p_val:
+        #     best_comb = columns_bac_time
+        #     p_val = p_value_interaction_tag_bac
+    return p_val_interaction_list, p_val_tag_list
+
+
+def anova_repeated_measures(data_frame):
+    # Ensure 'Tag' column is of type 'category'
+    data_frame['Tag'] = data_frame['Tag'].astype('category')
+    data_frame = data_frame.reset_index()
+    df_melt = pd.melt(data_frame, id_vars=['Tag'], value_vars=data_frame.columns,
+                      var_name='Bacteria', value_name='Value')
+
+    # Fit the ANOVA model
+    model = ols('Value ~ C(Bacteria) + C(Tag) + C(Bacteria):C(Tag)', data=df_melt).fit()
+
+    anova_table = anova_lm(model, typ=2)
+
+    # Extract p-value for the interaction term
+    p_value_interaction_tag_bac = anova_table.loc['C(Bacteria):C(Tag)', 'PR(>F)']
+    p_value_tag = anova_table.loc['C(Tag)', 'PR(>F)']
+    return p_value_interaction_tag_bac, p_value_tag
+
+
 def create_comb_names(top_k_indices, filtered_combinations_graph_nodes):
     return [filtered_combinations_graph_nodes[idx] for idx in top_k_indices]
 
@@ -1115,30 +1604,53 @@ def get_tag(processed_train, tag):
     y_train = []
     for index in processed_train.index:
         y_train.append(tag.loc[index])
-    return y_train
+
+    data_frame_tag = pd.DataFrame(y_train)
+    return data_frame_tag
 
 
-def add_taxonomy_levels_comb(comb: list):
+def add_taxonomy_levels_comb(comb, mode='reg'):
     taxonomy = ['k__', ';p__', ';c__', ';o__', ';f__', ';g__', ';s__']
     all = []
-    for node_comb in comb:
-        node_name = ''
-        last_index = 0
-        all_nodes = node_comb.split(';')
-        for index, node in enumerate(all_nodes):
-            node_name += taxonomy[index] + node
-            last_index = index
-        for index in range(last_index + 1, len(taxonomy_levels)):
-            node_name += taxonomy[index]
-        all.append(node_name)
+    if mode == 'reg':
+        for node_comb in comb:
+            node_name = ''
+            last_index = 0
+            all_nodes = node_comb.split(';')
+            for index, node in enumerate(all_nodes):
+                node_name += taxonomy[index] + node
+                last_index = index
+            for index in range(last_index + 1, len(taxonomy_levels)):
+                node_name += taxonomy[index]
+            all.append(node_name)
+    if mode == "thereare":
+        for node_comb in comb:
+            node_name = node_comb
+            len_name_node = len(node_name.split(";"))
+            for index in range(len_name_node, len(taxonomy_levels)):
+                node_name += taxonomy[index]
+            all.append(node_name)
     return all
 
 
 if __name__ == '__main__':
-    # df = pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/Results_train/scores.csv")
-    # chi = df['score']
-    # df['p_value'] = 1 - statss.chi2.sf(chi, 3)
-    # df.to_csv("see.csv")
-    evaluate(3)
+    scores_train= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/scores_train.csv",index_col=0)
+    scores_test= pd.read_csv("/home/shanif3/Dyamic_data/GDM-original/src/PRJNA1130109/scores_test.csv",index_col=0)
 
-c = 0
+    scores_train['sum_health_sick'] = scores_train['healthy'] + scores_test['sick']
+
+    # Identify rows in the training set where the sum is greater than 40
+    rmove = scores_train[scores_train['sum_health_sick'] < 10]
+
+    # Get the indices of these rows
+    filtered_indices = rmove.index
+
+    # Remove the corresponding rows from the test set
+    scores_test = scores_test.drop(filtered_indices, errors='ignore')
+    scores_train=scores_train.drop(filtered_indices,errors='ignore')
+
+    plot_chi_square_train_vs_test(scores_train, scores_test)
+    plot_combined_histogram(scores_train,mode='train')
+    plot_combined_histogram(scores_test,mode='test')
+    k=3
+    # evaluate(k)
